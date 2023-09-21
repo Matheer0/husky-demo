@@ -54,4 +54,19 @@
   <!-- Optional custom includes. -->
   <xacro:include filename="$(arg urdf_extras)" />
 
+
+  <!-- Pulish ground truth info under topic /ground_truth -->
+  <gazebo>
+    <plugin name="ground_truth" filename="libgazebo_ros_p3d.so">
+      <ros>
+        <!-- rename /odometry/odom -->
+        <namespace>$(arg prefix)</namespace>
+        <remapping>odom:=ground_truth</remapping>
+      </ros>
+      <frame_name>map</frame_name>
+      <body_name>base_link</body_name>
+      <update_rate>5.0</update_rate>
+    </plugin>
+  </gazebo>  
+
 </robot>
