@@ -14,6 +14,8 @@
 #include <iostream>
 #include <memory>
 #include <chrono>
+#include <cstdio>
+#include <ctime>
 
 
 class MPCNode : public rclcpp::Node
@@ -54,6 +56,10 @@ public:
     double dt_;
     double x_init_;
     double x_target_;
+
+    double ave_compute_time_ = 0;
+    double min_compute_time_ = 0;
+    double max_compute_time_ = 0;
 };
 
 
@@ -72,8 +78,11 @@ MPCNode::MPCNode() : rclcpp::Node("mpc_node")
     double y_reference = 0;
     off_set_ = 10;
 
-    dt_ = 0.2;  // time between steps in seconds
+    dt_ = 0.1;  // time between steps in seconds
     N_ = 35; // number of look ahead steps
+
+    //N = 25: ave time = 0.052
+    //N = 35: ave time = 0.062
 
     // Husky Physical Properties
     // https://github.com/husky/husky/blob/677120693643ca4b6ed3c14078dedbb8ced3b781/husky_control/config/control.yaml#L29-L42
@@ -156,7 +165,7 @@ MPCNode::MPCNode() : rclcpp::Node("mpc_node")
 
     velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 1);
     ground_truth_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>("/ground_truth", 1, std::bind(&MPCNode::extract_ground_truth_state, this, std::placeholders::_1));
-    auto duration = std::chrono::milliseconds((int)(dt_*1000));
+    auto duration = std::chrono::milliseconds((int)(dt_));
     control_timer_ = this->create_wall_timer(duration, std::bind(&MPCNode::timer_callback, this));
 }
 
@@ -178,9 +187,15 @@ casadi::DM MPCNode::shift_timestep_ground_truth(const casadi::DM &current_state,
 
 void MPCNode::timer_callback()
 {   
-    RCLCPP_INFO_STREAM(this->get_logger(), state_init_nmpc_ << "\n-------------");
+    // RCLCPP_INFO_STREAM(this->get_logger(), state_init_nmpc_ << "\n-------------");
+    
     if ((double)norm_2(state_init_nmpc_ - state_target_) > 1)
     {
+        // timing computation time
+        std::clock_t start;
+        double duration;
+        start = std::clock();
+
         auto args_nmpc = nmpc_problem_.generate_state_constraints(state_init_nmpc_, robot_nmpc_.safety_radius_, 
                 map_.x_init_, map_.x_target_, map_.y_lower_limit_, map_.y_upper_limit_, 
                 robot_nmpc_.linear_v_min_, robot_nmpc_.linear_v_max_, robot_nmpc_.angular_v_min_, 
@@ -209,6 +224,14 @@ void MPCNode::timer_callback()
         // Update robot position using control from NMPC
         trajectory_nmpc_ = horzcat(trajectory_nmpc_, state_init_nmpc_); // TODO: Double check this
         ++mpc_iter_;
+
+
+        duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
+        ave_compute_time_ += duration;
+        // std::cout<<"printf: "<< duration <<'\n';
+    } else
+    {
+    std::cout<<"ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
     }
 }
 
@@ -228,6 +251,7 @@ int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
     rclcpp::spin(std::make_shared<MPCNode>());
+    //std::cout<<"ave_compute_time: "<< MPCNode.ave_compute_time_/MPCNode.mpc_iter_ <<'\n';
     rclcpp::shutdown();
 }
 
