@@ -1,10 +1,14 @@
 #include "husky_mpc_cpp/Robot.hpp"
+#include <iostream>
+#include <Eigen/Dense>
 
-Robot::Robot(double safety_radius, double linear_v_min, 
-    double linear_v_max, double angular_v_min, double angular_v_max) : safety_radius_(safety_radius), linear_v_min_(linear_v_min), 
-        linear_v_max_(linear_v_max), angular_v_min_(angular_v_min), angular_v_max_(angular_v_max)
+Robot::Robot(double linear_v, double angular_v, double x, double y, double omega,
+    double linear_v_max, double angular_v_max, double dt): 
+        current_linear_v_(linear_v), current_angular_v_(angular_v), 
+        linear_v_max_(linear_v_max), angular_v_max_(angular_v_max)
 {
-    // location_ = Eigen::VectorXd({x, y, omega});
+    Eigen::VectorXd location_ = Eigen::VectorXd({x, y, omega});
+
     // x_dot = Eigen::VectorXd({0, 0, 0});
     // wheel_speed_ = Eigen::VectorXd({0, 0});
 
@@ -17,9 +21,14 @@ Robot::Robot(double safety_radius, double linear_v_min,
     //                             {0, b_, 1},
     //                             {-b_, b_, 1}});
 
-    // B_matrix = Eigen::MatrixXd({{cos(location_(2, 0))*dt, 0},
-    //                         {sin(location_(2, 0))*dt, 0},
-    //                         {0, dt}});
+
+    Eigen::MatrixXd B_matrix_;
+    B_matrix_(0,0) = cos(location_(2, 0))*dt;
+    B_matrix_(0,1) = 0;
+    B_matrix_(1,0) = sin(location_(2, 0))*dt;
+    B_matrix_(1,1) = 0;
+    B_matrix_(2,0) = 0;
+    B_matrix_(2,1) = dt;
 
     // ikine_mat_ = Eigen::MatrixXd({{1/r_, 0, b_/r_},
     //                             {1/r_, 0, -b_/r_}});
