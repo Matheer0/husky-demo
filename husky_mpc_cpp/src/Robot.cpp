@@ -7,7 +7,7 @@ Robot::Robot(double linear_v, double angular_v, double x, double y, double omega
         current_linear_v_(linear_v), current_angular_v_(angular_v), 
         linear_v_max_(linear_v_max), angular_v_max_(angular_v_max)
 {
-    Eigen::VectorXd location_ = Eigen::VectorXd({x, y, omega});
+    //Eigen::VectorXd location_ = Eigen::VectorXd({x, y, omega});
 
     // x_dot = Eigen::VectorXd({0, 0, 0});
     // wheel_speed_ = Eigen::VectorXd({0, 0});
@@ -20,15 +20,17 @@ Robot::Robot(double linear_v, double angular_v, double x, double y, double omega
     //                             {b_, 0, 1},
     //                             {0, b_, 1},
     //                             {-b_, b_, 1}});
+    
 
-
-    Eigen::MatrixXd B_matrix_;
+    /*
+    Eigen::MatrixXd B_matrix_(3,2);
     B_matrix_(0,0) = cos(location_(2, 0))*dt;
     B_matrix_(0,1) = 0;
     B_matrix_(1,0) = sin(location_(2, 0))*dt;
     B_matrix_(1,1) = 0;
     B_matrix_(2,0) = 0;
     B_matrix_(2,1) = dt;
+    */
 
     // ikine_mat_ = Eigen::MatrixXd({{1/r_, 0, b_/r_},
     //                             {1/r_, 0, -b_/r_}});
