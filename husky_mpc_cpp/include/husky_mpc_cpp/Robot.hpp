@@ -13,12 +13,8 @@ public:
     Robot() = default; // default constructor (no arguments)
     Robot(double linear_v,
         double angular_v, 
-        double x,
-        double y,
-        double omega,
         double linear_v_max, 
-        double angular_v_max,
-        double dt);
+        double angular_v_max);
     // Eigen::VectorXd inverse_kinematics(void);
     // void set_robot_velocity(double linear_velocity, double angular_velocity);
     // void update_state(double dt);
@@ -31,8 +27,8 @@ public:
     double linear_v_max_;
     double angular_v_max_;
 
-    Eigen::VectorXd location_;
-    Eigen::MatrixXd B_matrix_;
+    // Eigen::VectorXd location_;
+    // Eigen::MatrixXd B_matrix_;
 
     // Eigen::VectorXd location_;
     // Eigen::VectorXd x_dot_;

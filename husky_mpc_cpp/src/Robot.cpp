@@ -2,8 +2,7 @@
 #include <iostream>
 #include <Eigen/Dense>
 
-Robot::Robot(double linear_v, double angular_v, double x, double y, double omega,
-    double linear_v_max, double angular_v_max, double dt): 
+Robot::Robot(double linear_v, double angular_v, double linear_v_max, double angular_v_max): 
         current_linear_v_(linear_v), current_angular_v_(angular_v), 
         linear_v_max_(linear_v_max), angular_v_max_(angular_v_max)
 {

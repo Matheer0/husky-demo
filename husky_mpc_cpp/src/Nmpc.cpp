@@ -101,7 +101,8 @@ std::map<std::string, casadi::DM> NMPC::generate_state_constraints(const casadi:
         ubx_(n_states_*(N_+1) + n_controls_*k + 1) = max_angular_speed;
     }
     std::map<std::string, casadi::DM> args_nmpc = {
-        {"lbg", vertcat(safety_radius*casadi::DM::ones(obstacle_list.size() * N_, 1), 
+        // TODO: update constraints
+        {"lbg", vertcat(1*casadi::DM::ones(obstacle_list.size() * N_, 1), 
                           casadi::DM::zeros(n_states_*(N_+1), 1),
                           -1*max_linear_acc_*casadi::DM::ones(N_-1, 1),
                           -1*max_angular_acc_*casadi::DM::ones(N_-1, 1)
