@@ -12,13 +12,22 @@ class NMPC
 {
 public:
     NMPC() = default; // default constructor (no arguments)
+
     NMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_controls, const casadi::DM& Q, const casadi::DM& R, int n_states, int n_controls,
         int N, double max_linear_acc, double max_angular_acc);
+
     std::tuple<casadi::SX, casadi::SX> compute_cost(const casadi::SX& P, double time_interval, const casadi::Function& dynamics_function);
     casadi::SX generate_obstacle_avoidance_constraints(const std::vector<Obstacle>& obstacle_list);
     casadi::SX generate_acceleration_constraints(double time_interval);
-    std::map<std::string, casadi::DM> generate_state_constraints(const casadi::SX& current_state, double safety_radius, double lower_x_constraint, double upper_x_constraint, double lower_y_constraint, double upper_y_constraint, 
-                                   double min_linear_speed, double max_linear_speed, double min_angular_speed, double max_angular_speed, const std::vector<Obstacle>& obstacle_list);
+
+
+    std::map<std::string, casadi::DM> generate_state_constraints(double lower_x_constraint, double upper_x_constraint, 
+                                                                 double lower_y_constraint, double upper_y_constraint, 
+                                                                 double current_linear_v, double current_angular_v,
+                                                                 double max_linear_speed, double max_angular_speed, 
+                                                                 double time_interval, const std::vector<Obstacle>& obstacle_list);
+
+
     std::map<std::string, casadi::SX> define_problem(const casadi::SX& P, double dt, const casadi::Function& dynamics_function, const std::vector<Obstacle>& obstacle_list);
 
 
