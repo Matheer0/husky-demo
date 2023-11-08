@@ -77,8 +77,8 @@ MPCNode::MPCNode() : rclcpp::Node("mpc_node")
     n_states_ = states.numel(); // 3 states
 
     // TODO: +dynamics_covariance
-    dt_ = 0.1;  // time between steps in seconds
-    N_ = 35; // number of look ahead steps
+    dt_ = 0.08;  // time between steps in seconds
+    N_ = 50; // number of look ahead steps
 
 
     // Husky Physical Properties
@@ -170,7 +170,7 @@ MPCNode::MPCNode() : rclcpp::Node("mpc_node")
 
     velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 1);
     ground_truth_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>("/ground_truth", 1, std::bind(&MPCNode::extract_ground_truth_state, this, std::placeholders::_1));
-    auto duration = std::chrono::milliseconds((int)(dt_));
+    auto duration = std::chrono::milliseconds((int)(dt_*1000));
     control_timer_ = this->create_wall_timer(duration, std::bind(&MPCNode::timer_callback, this));
 }
 
@@ -203,11 +203,9 @@ void MPCNode::timer_callback()
     if ((double)norm_2(mtimes(mask, state_init_nmpc_) - mtimes(mask, state_target_)) > stop_distance_)
     {   
         // timing computation time
-        std::clock_t start;
-        double duration;
-        start = std::clock();
+        std::clock_t start = std::clock();
 
-        auto args_nmpc = nmpc_problem_.generate_state_constraints( 
+        auto args_nmpc = nmpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
                 map_.y_lower_limit_, map_.y_upper_limit_, 
                 robot_nmpc_.current_linear_v_, robot_nmpc_.current_angular_v_, 
@@ -275,9 +273,9 @@ void MPCNode::timer_callback()
         ++mpc_iter_;
 
 
-        duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
+        double duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
         ave_compute_time_ += duration;
-        // std::cout<<"printf: "<< duration <<'\n';
+        std::cout<<"duration: "<< duration <<"\n-------------";
     } else
     {
     std::cout<<"ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
