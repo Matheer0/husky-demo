@@ -23,9 +23,8 @@ public:
 
     std::map<std::string, casadi::DM> generate_state_constraints(double lower_x_constraint, double upper_x_constraint, 
                                                                  double lower_y_constraint, double upper_y_constraint, 
-                                                                 double current_linear_v, double current_angular_v,
                                                                  double max_linear_speed, double max_angular_speed, 
-                                                                 double time_interval, const std::vector<Obstacle>& obstacle_list);
+                                                                 double max_safety_distance, const std::vector<Obstacle>& obstacle_list);
 
 
     std::map<std::string, casadi::SX> define_problem(const casadi::SX& P, double dt, const casadi::Function& dynamics_function, const std::vector<Obstacle>& obstacle_list);

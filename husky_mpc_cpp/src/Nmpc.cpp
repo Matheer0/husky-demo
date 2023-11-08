@@ -82,11 +82,11 @@ casadi::SX NMPC::generate_acceleration_constraints(double time_interval)
 }
 
 
-std::map<std::string, casadi::DM> NMPC::generate_state_constraints(double lower_x_constraint, double upper_x_constraint, 
-                                                                   double lower_y_constraint, double upper_y_constraint, 
-                                                                   double current_linear_v, double current_angular_v,
-                                                                   double max_linear_speed, double max_angular_speed, 
-                                                                   double time_interval, const std::vector<Obstacle>& obstacle_list)
+std::map<std::string, casadi::DM> NMPC::generate_state_constraints(
+            double lower_x_constraint, double upper_x_constraint, 
+            double lower_y_constraint, double upper_y_constraint, 
+            double max_linear_speed, double max_angular_speed, 
+            double max_safety_distance, const std::vector<Obstacle>& obstacle_list)
 {
     // STATE LOWER BOUNDS
     lbx_(casadi::Slice(0, n_states_*(N_+1), n_states_)) = lower_x_constraint;
@@ -115,34 +115,26 @@ std::map<std::string, casadi::DM> NMPC::generate_state_constraints(double lower_
     // LOWER and UPPER BOUNDS for CONTROL u
     for (int k = 0; k < N_; ++k)
     {
-        if (k == 0){
-            // first step in prediction horizon
-            double change_of_linear_speed = max_linear_acc_*time_interval;
-            double change_of_angular_speed = max_angular_acc_*time_interval;
-
-            lbx_(n_states_*(N_+1) + n_controls_*k) = std::max(-1*max_linear_speed, -1*change_of_linear_speed+current_linear_v);
-            lbx_(n_states_*(N_+1) + n_controls_*k + 1) = std::max(-1*max_angular_speed, -1*change_of_angular_speed+current_angular_v);
-            
-            ubx_(n_states_*(N_+1) + n_controls_*k) = std::min(max_linear_speed, change_of_linear_speed+current_linear_v);
-            ubx_(n_states_*(N_+1) + n_controls_*k + 1) = std::min(max_angular_speed, change_of_angular_speed+current_angular_v);
-        } else {
-            lbx_(n_states_*(N_+1) + n_controls_*k) = -1 * max_linear_speed;
-            lbx_(n_states_*(N_+1) + n_controls_*k + 1) = -1 * max_angular_speed;
-            ubx_(n_states_*(N_+1) + n_controls_*k) = max_linear_speed;
-            ubx_(n_states_*(N_+1) + n_controls_*k + 1) = max_angular_speed;
-        }
-        
+        lbx_(n_states_*(N_+1) + n_controls_*k) = -1 * max_linear_speed;
+        lbx_(n_states_*(N_+1) + n_controls_*k + 1) = -1 * max_angular_speed;
+        ubx_(n_states_*(N_+1) + n_controls_*k) = max_linear_speed;
+        ubx_(n_states_*(N_+1) + n_controls_*k + 1) = max_angular_speed;
     }
 
+    casadi::DM min_distance;
+    for (auto obstacle : obstacle_list)
+    {
+        min_distance = vertcat(casadi::DM(min_distance), 
+                            obstacle.radius_*casadi::DM::ones(N_, 1)); // append minimum safety distance to current obstacle
+    }
 
     std::map<std::string, casadi::DM> args_nmpc = {
-        // TODO: update constraints
-        {"lbg", vertcat(4*casadi::DM::ones(obstacle_list.size() * N_, 1), 
+        {"lbg", vertcat(min_distance, 
                           casadi::DM::zeros(n_states_*(N_+1), 1),
                           -1*max_linear_acc_*casadi::DM::ones(N_-1, 1),
                           -1*max_angular_acc_*casadi::DM::ones(N_-1, 1)
                         )},  // constraints lower bound
-        {"ubg", vertcat(400*casadi::DM::ones(obstacle_list.size() * N_, 1), 
+        {"ubg", vertcat(max_safety_distance*casadi::DM::ones(obstacle_list.size() * N_, 1), 
                           casadi::DM::zeros(n_states_*(N_+1), 1),
                           max_linear_acc_*casadi::DM::ones(N_-1, 1),
                           max_angular_acc_*casadi::DM::ones(N_-1, 1)

@@ -56,6 +56,7 @@ public:
     int mpc_iter_;
 
     double stop_distance_;
+    double max_distance_to_obstacle_;
     double off_set_;
     double dt_;
     double x_init_;
@@ -166,6 +167,7 @@ MPCNode::MPCNode() : rclcpp::Node("mpc_node")
 
     mpc_iter_ = 0;
     stop_distance_ = 0.5;
+    max_distance_to_obstacle_ = 15.0;
     RCLCPP_INFO(this->get_logger(), "Finishing initialization");
 
     velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 1);
@@ -208,9 +210,8 @@ void MPCNode::timer_callback()
         auto args_nmpc = nmpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
                 map_.y_lower_limit_, map_.y_upper_limit_, 
-                robot_nmpc_.current_linear_v_, robot_nmpc_.current_angular_v_, 
                 robot_nmpc_.linear_v_max_, robot_nmpc_.angular_v_max_, 
-                dt_, map_.obstacle_list);
+                max_distance_to_obstacle_, map_.obstacle_list);
 
         args_nmpc["p"] = state_init_nmpc_;
         // target states
