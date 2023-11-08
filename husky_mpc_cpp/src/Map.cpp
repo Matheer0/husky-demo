@@ -10,13 +10,19 @@ Map::Map(double x_init, double y_init, double x_target, double y_target, double 
     y_upper_limit_ = y_center_ + offset_;
     y_lower_limit_ = y_center_ - offset_;
 
+    // Map Parameters for Square Rooms
     x_lower_limit_ = x_center_ - offset_;
 	x_upper_limit_ = x_center_ + offset_;
+	
+    // Map Parameters for Straight Rooms
+    x_lower_limit_ = 0;
+	x_upper_limit_ = x_center_;
+    
 }
 		
 void Map::generate_circular_obstacles()
 {
-    double default_radius = 1;
+    double default_radius = 2;
     Obstacle obs(15, 0, default_radius);
     obstacle_list.push_back(obs);
 }
