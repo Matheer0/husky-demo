@@ -17,6 +17,8 @@
 #include <cstdio>
 #include <ctime>
 #include <cmath>
+#include <Eigen/Dense>
+#include <random>
 
 
 class MPCNode : public rclcpp::Node
@@ -63,8 +65,12 @@ public:
     double x_target_;
 
     double ave_compute_time_ = 0;
-    double min_compute_time_ = 0;
+    double min_compute_time_ = 100;
     double max_compute_time_ = 0;
+
+    Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd({{ 0.2, 0.1, 0.1,},
+                                                            {0.1, 0.2, 0.1},
+                                                            {0.1, 0.1, 0.3}});
 };
 
 
@@ -77,9 +83,14 @@ MPCNode::MPCNode() : rclcpp::Node("mpc_node")
     casadi::SX states = vertcat(x, y, theta);   // [x, y, theta]
     n_states_ = states.numel(); // 3 states
 
-    // TODO: +dynamics_covariance
-    dt_ = 0.08;  // time between steps in seconds
-    N_ = 50; // number of look ahead steps
+    dt_ = 0.1;  // time between steps in seconds
+    N_ = 100; // number of look ahead steps
+
+    dt_ = 0.08;  
+    N_ = 50; 
+
+    //dt_ = 0.1;  
+    //N_ = 100;
 
 
     // Husky Physical Properties
@@ -194,7 +205,7 @@ casadi::DM MPCNode::shift_timestep_ground_truth(const casadi::DM &current_state,
 
 void MPCNode::timer_callback()
 {   
-    RCLCPP_INFO_STREAM(this->get_logger(), state_init_nmpc_ << "\n-------------");
+    //RCLCPP_INFO_STREAM(this->get_logger(), state_init_nmpc_ << "\n-------------");
 
     // record robot position
     if (mpc_iter_ != 0){
@@ -207,13 +218,40 @@ void MPCNode::timer_callback()
         // timing computation time
         std::clock_t start = std::clock();
 
+
+        // NOISE in DYNAMICS
+        // use a random seed based on the current time
+        unsigned seed = static_cast<unsigned>(std::chrono::system_clock::now().time_since_epoch().count());
+        std::default_random_engine generator(seed);
+
+        // create a standard normal distribution
+        std::normal_distribution<double> distribution(0.0, 1.0);
+        Eigen::VectorXd state_noise(n_states_);
+        for (int j = 0; j < n_states_; j++) {
+            // generate random number from normal distribution
+            state_noise(j) = distribution(generator);
+        }
+        // transform using the Cholesky decomposition of the covariance matrix
+        state_noise = dynamics_covariance_.llt().matrixL() * state_noise;
+
+        //std::cout << "Generated state_noise:" << std::endl;
+        //std::cout << state_noise << std::endl;
+
+        // convert the Eigen::VectorXd to a CasADi DM
+        casadi::DM dm_noise{std::vector<double>(state_noise.data(), state_noise.size() + state_noise.data())};
+
+        // now use the CasADi matrix
+        // std::cout << "CasADi DM Matrix:" << std::endl << dm_noise << std::endl;
+        // std::cout << "new state:" << std::endl << state_init_nmpc_+ dm_noise << std::endl;
+
+
         auto args_nmpc = nmpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
                 map_.y_lower_limit_, map_.y_upper_limit_, 
                 robot_nmpc_.linear_v_max_, robot_nmpc_.angular_v_max_, 
                 max_distance_to_obstacle_, map_.obstacle_list);
 
-        args_nmpc["p"] = state_init_nmpc_;
+        args_nmpc["p"] = state_init_nmpc_+ dm_noise;
         // target states
         for (int j = 0; j < N_; ++j)
         {
@@ -275,11 +313,18 @@ void MPCNode::timer_callback()
 
 
         double duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
+        if (duration > max_compute_time_){
+            max_compute_time_ = duration;
+        }
+        if (duration < min_compute_time_){
+            min_compute_time_ = duration;
+        }
         ave_compute_time_ += duration;
-        std::cout<<"duration: "<< duration <<"\n-------------";
-    } else
-    {
-    std::cout<<"ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
+        std::cout<<"duration: "<< duration <<"\n-------------\n";
+    } else {
+        std::cout<<"max_compute_time: "<< max_compute_time_ <<'\n';
+        std::cout<<"min_compute_time: "<< min_compute_time_ <<'\n';
+        std::cout<<"ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
     }
 }
 
