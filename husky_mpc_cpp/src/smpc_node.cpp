@@ -1,6 +1,6 @@
 #include "husky_mpc_cpp/map.hpp"
 #include "husky_mpc_cpp/robot.hpp"
-#include "husky_mpc_cpp/nmpc.hpp"
+#include "husky_mpc_cpp/smpc.hpp"
 #include "husky_mpc_cpp/mpc_util.hpp"
 
 #include "rclcpp/rclcpp.hpp"
@@ -21,10 +21,10 @@
 #include <random>
 
 
-class NMPCNode : public rclcpp::Node
+class SMPCNode : public rclcpp::Node
 {
 public:
-    NMPCNode();
+    SMPCNode();
     // def update_dynamics(self, current_state, f):
     casadi::DM update_dynamics(const casadi::DM& current_state, const casadi::Function& f);
     casadi::DM shift_timestep_ground_truth(const casadi::DM& current_state, const casadi::DM& u, const casadi::Function& f);
@@ -38,19 +38,19 @@ public:
     casadi::DM state_init_;
     casadi::DM state_target_;
     casadi::Function dynamics_function_;
-    casadi::DM state_init_nmpc_;
-    casadi::DM horizon_controls_nmpc_;
-    casadi::DM horizon_states_nmpc_;
-    casadi::Function solver_nmpc_;
+    casadi::DM state_init_smpc_;
+    casadi::DM horizon_controls_smpc_;
+    casadi::DM horizon_states_smpc_;
+    casadi::Function solver_smpc_;
 
     // TODO: fix Q, R array type
     casadi::DM Q_array_;
     casadi::DM R_array_;
-    casadi::DM trajectory_nmpc_;
+    casadi::DM trajectory_smpc_;
 
-    Robot robot_nmpc_;
+    Robot robot_smpc_;
     Map map_;
-    NMPC nmpc_problem_;
+    SMPC smpc_problem_;
 
     int n_states_;
     int N_; // number of look ahead steps
@@ -74,7 +74,7 @@ public:
 };
 
 
-NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
+SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
 {
     // Set up state symbolic variables
     casadi::SX x = casadi::SX::sym("x");
@@ -134,7 +134,7 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     state_target_ = casadi::DM({{x_target_}, {y_target}, {theta_target}});
 
     // set up robot
-    robot_nmpc_ = Robot(0., 0., linear_v_max, angular_v_max);
+    robot_smpc_ = Robot(0., 0., linear_v_max, angular_v_max);
 
     map_ = Map(x_init_, y_init, x_target_, y_target, theta_target, 
         x_center, y_center, off_set_);
@@ -147,24 +147,24 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     n_controls_ = controls.numel(); // get the number of control elements, = 2
 
     // Matrix containing all states over all time steps +1 (each column is a state vector)
-    casadi::SX X_nmpc = casadi::SX::sym("X", n_states_, N_+1); // nominal mpc
+    casadi::SX X_smpc = casadi::SX::sym("X", n_states_, N_+1); // nominal mpc
 
     // Matrix containing all control actions over all time steps (each column is an action vector)
-    casadi::SX U_nmpc = casadi::SX::sym("U", n_controls_, N_);
+    casadi::SX U_smpc = casadi::SX::sym("U", n_controls_, N_);
 
     // Maps controls from [va, vb, vc, vd].T to [vx, vy, omega].T, i.e. compute matrix B
     dynamics_function_ = dynamics(states);
 
 
-    // Set up NMPC problem
-    nmpc_problem_ = NMPC(X_nmpc, U_nmpc, Q, R, n_states_, n_controls_, 
+    // Set up SMPC problem
+    smpc_problem_ = SMPC(X_smpc, U_smpc, Q, R, n_states_, n_controls_, 
                          N_, linear_acceleration_max, angular_acceleration_max);
-    std::map<std::string, casadi::SX> nlp_prob_nmpc = nmpc_problem_.define_problem(P, dt_, dynamics_function_, map_.obstacle_list); // Dynamics func here
-    state_init_nmpc_ = state_init_;
+    std::map<std::string, casadi::SX> nlp_prob_smpc = smpc_problem_.define_problem(P, dt_, dynamics_function_, map_.obstacle_list); // Dynamics func here
+    state_init_smpc_ = state_init_;
 
-    horizon_controls_nmpc_ = casadi::DM::zeros(n_controls_, N_); // initial control
-    horizon_states_nmpc_ = repmat(state_init_nmpc_, 1, N_+1); // initial state full
-    trajectory_nmpc_ = state_init_nmpc_; // stores robot's real states
+    horizon_controls_smpc_ = casadi::DM::zeros(n_controls_, N_); // initial control
+    horizon_states_smpc_ = repmat(state_init_smpc_, 1, N_+1); // initial state full
+    trajectory_smpc_ = state_init_smpc_; // stores robot's real states
 
     casadi::Dict opts;
     casadi::Dict ipopt_opts;
@@ -174,7 +174,7 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     ipopt_opts["acceptable_obj_change_tol"] = 1e-6;
     opts["ipopt"] = ipopt_opts;
     opts["print_time"] = 0;
-    solver_nmpc_ = casadi::nlpsol("solver", "ipopt", nlp_prob_nmpc, opts);
+    solver_smpc_ = casadi::nlpsol("solver", "ipopt", nlp_prob_smpc, opts);
 
     mpc_iter_ = 0;
     stop_distance_ = 0.5;
@@ -182,19 +182,19 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     RCLCPP_INFO(this->get_logger(), "Finishing initialization");
 
     velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 1);
-    ground_truth_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>("/ground_truth", 1, std::bind(&NMPCNode::extract_ground_truth_state, this, std::placeholders::_1));
+    ground_truth_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>("/ground_truth", 1, std::bind(&SMPCNode::extract_ground_truth_state, this, std::placeholders::_1));
     auto duration = std::chrono::milliseconds((int)(dt_*1000));
-    control_timer_ = this->create_wall_timer(duration, std::bind(&NMPCNode::timer_callback, this));
+    control_timer_ = this->create_wall_timer(duration, std::bind(&SMPCNode::timer_callback, this));
 }
 
-casadi::DM NMPCNode::update_dynamics(const casadi::DM& current_state, const casadi::Function& f)
+casadi::DM SMPCNode::update_dynamics(const casadi::DM& current_state, const casadi::Function& f)
 {
     casadi::DM rotation_matrix = f(current_state)[0];
     casadi::DM matrix_B = dt_*rotation_matrix; // update speed, type: casadi.DM
     return matrix_B;
 }
 
-casadi::DM NMPCNode::shift_timestep_ground_truth(const casadi::DM &current_state, const casadi::DM &u, const casadi::Function &f)
+casadi::DM SMPCNode::shift_timestep_ground_truth(const casadi::DM &current_state, const casadi::DM &u, const casadi::Function &f)
 {
     casadi::DM rotation_matrix = f(current_state)[0]; // update speed, type: casadi.DM
     casadi::DM matrix_B = dt_*rotation_matrix;
@@ -203,17 +203,17 @@ casadi::DM NMPCNode::shift_timestep_ground_truth(const casadi::DM &current_state
 }
 
 
-void NMPCNode::timer_callback()
+void SMPCNode::timer_callback()
 {   
-    //RCLCPP_INFO_STREAM(this->get_logger(), state_init_nmpc_ << "\n-------------");
+    //RCLCPP_INFO_STREAM(this->get_logger(), state_init_smpc_ << "\n-------------");
 
     // record robot position
     if (mpc_iter_ != 0){
-        trajectory_nmpc_ = horzcat(trajectory_nmpc_, state_init_nmpc_);
+        trajectory_smpc_ = horzcat(trajectory_smpc_, state_init_smpc_);
     }
 
     auto mask = casadi::DM({{1, 0, 0}, {0, 1, 0}}); // Mask to extract x and y coordinates from state vector
-    if ((double)norm_2(mtimes(mask, state_init_nmpc_) - mtimes(mask, state_target_)) > stop_distance_)
+    if ((double)norm_2(mtimes(mask, state_init_smpc_) - mtimes(mask, state_target_)) > stop_distance_)
     {   
         // timing computation time
         std::clock_t start = std::clock();
@@ -242,58 +242,58 @@ void NMPCNode::timer_callback()
 
         // now use the CasADi matrix
         // std::cout << "CasADi DM Matrix:" << std::endl << dm_noise << std::endl;
-        // std::cout << "new state:" << std::endl << state_init_nmpc_+ dm_noise << std::endl;
+        // std::cout << "new state:" << std::endl << state_init_smpc_+ dm_noise << std::endl;
 
 
-        auto args_nmpc = nmpc_problem_.generate_state_constraints(
+        auto args_smpc = smpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
                 map_.y_lower_limit_, map_.y_upper_limit_, 
-                robot_nmpc_.linear_v_max_, robot_nmpc_.angular_v_max_, 
+                robot_smpc_.linear_v_max_, robot_smpc_.angular_v_max_, 
                 max_distance_to_obstacle_, map_.obstacle_list);
 
-        args_nmpc["p"] = state_init_nmpc_+ dm_noise;
+        args_smpc["p"] = state_init_smpc_+ dm_noise;
         // target states
         for (int j = 0; j < N_; ++j)
         {
-            args_nmpc["p"] = vertcat(casadi::SX(args_nmpc["p"]), casadi::SX(state_target_));
+            args_smpc["p"] = vertcat(casadi::SX(args_smpc["p"]), casadi::SX(state_target_));
         }
 
         // initial guess for optimization variables
-        args_nmpc["x0"] = vertcat(reshape(horizon_states_nmpc_, n_states_*(N_+1), 1), reshape(horizon_controls_nmpc_, n_controls_*N_, 1));
+        args_smpc["x0"] = vertcat(reshape(horizon_states_smpc_, n_states_*(N_+1), 1), reshape(horizon_controls_smpc_, n_controls_*N_, 1));
 
         // SOLVE OPTIMIZATION PROBLEM
-        auto result_nmpc = solver_nmpc_(args_nmpc);
+        auto result_smpc = solver_smpc_(args_smpc);
         // STORE HORIZON INFO
-        auto control_results_nmpc = reshape(result_nmpc["x"](casadi::Slice(n_states_*(N_+1), n_states_*(N_+1) + n_controls_*N_)), n_controls_, N_);
-        horizon_states_nmpc_ = reshape(result_nmpc["x"](casadi::Slice(0, n_states_*(N_+1))), n_states_, N_+1);
+        auto control_results_smpc = reshape(result_smpc["x"](casadi::Slice(n_states_*(N_+1), n_states_*(N_+1) + n_controls_*N_)), n_controls_, N_);
+        horizon_states_smpc_ = reshape(result_smpc["x"](casadi::Slice(0, n_states_*(N_+1))), n_states_, N_+1);
 
 
         // PUBLISH VELOCITY TO /husky_velocity_controller/cmd_vel_unstamped
         geometry_msgs::msg::Twist vel_msg;
-        double linear_v = (double)control_results_nmpc(casadi::Slice(), 0)(0);
-        double angular_v = (double)control_results_nmpc(casadi::Slice(), 0)(1);
+        double linear_v = (double)control_results_smpc(casadi::Slice(), 0)(0);
+        double angular_v = (double)control_results_smpc(casadi::Slice(), 0)(1);
 
-        if (std::abs(linear_v) > robot_nmpc_.linear_v_max_){
+        if (std::abs(linear_v) > robot_smpc_.linear_v_max_){
             double sign = 1.0;
             if (std::signbit(linear_v) == 1){
                 // negative velocity
                 sign = -1.0;
             }
-            linear_v = sign * robot_nmpc_.linear_v_max_;
+            linear_v = sign * robot_smpc_.linear_v_max_;
         }
 
-        if (std::abs(angular_v) > robot_nmpc_.angular_v_max_){
+        if (std::abs(angular_v) > robot_smpc_.angular_v_max_){
             double sign = 1.0;
             if (std::signbit(angular_v) == 1){
                 // negative velocity
                 sign = -1.0;
             }
-            angular_v = sign * robot_nmpc_.angular_v_max_;
+            angular_v = sign * robot_smpc_.angular_v_max_;
         }
 
         // update robot speed
-        robot_nmpc_.current_linear_v_ = linear_v;
-        robot_nmpc_.current_angular_v_ = angular_v;
+        robot_smpc_.current_linear_v_ = linear_v;
+        robot_smpc_.current_angular_v_ = angular_v;
 
         // send speed to ROS
         vel_msg.linear.x = linear_v;
@@ -304,10 +304,10 @@ void NMPCNode::timer_callback()
         //
         // USE HORIZON INFO AS INITIAL GUESS FOR NEXT ITERATION
         //
-        // auto B_nmpc = update_dynamics(state_init_nmpc_, dynamics_function_);
+        // auto B_smpc = update_dynamics(state_init_smpc_, dynamics_function_);
         // TODO: Double check this
-        horizon_controls_nmpc_ = horzcat(control_results_nmpc(casadi::Slice(), casadi::Slice(1, N_)), reshape(control_results_nmpc(casadi::Slice(), N_-1), -1, 1));
-        horizon_states_nmpc_ = horzcat(horizon_states_nmpc_(casadi::Slice(), casadi::Slice(1, N_+1)), reshape(horizon_states_nmpc_(casadi::Slice(), N_-1), -1, 1));
+        horizon_controls_smpc_ = horzcat(control_results_smpc(casadi::Slice(), casadi::Slice(1, N_)), reshape(control_results_smpc(casadi::Slice(), N_-1), -1, 1));
+        horizon_states_smpc_ = horzcat(horizon_states_smpc_(casadi::Slice(), casadi::Slice(1, N_+1)), reshape(horizon_states_smpc_(casadi::Slice(), N_-1), -1, 1));
 
         ++mpc_iter_;
 
@@ -320,15 +320,15 @@ void NMPCNode::timer_callback()
             min_compute_time_ = duration;
         }
         ave_compute_time_ += duration;
-        std::cout<<"nmpc duration: "<< duration <<"\n-------------\n";
+        std::cout<<"smpc duration: "<< duration <<"\n-------------\n";
     } else {
-        std::cout<<"nmpc max_compute_time: "<< max_compute_time_ <<'\n';
-        std::cout<<"nmpc min_compute_time: "<< min_compute_time_ <<'\n';
-        std::cout<<"nmpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
+        std::cout<<"smpc max_compute_time: "<< max_compute_time_ <<'\n';
+        std::cout<<"smpc min_compute_time: "<< min_compute_time_ <<'\n';
+        std::cout<<"smpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
     }
 }
 
-void NMPCNode::extract_ground_truth_state(const nav_msgs::msg::Odometry::SharedPtr msg)
+void SMPCNode::extract_ground_truth_state(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
     tf2::Quaternion q(msg->pose.pose.orientation.x, msg->pose.pose.orientation.y, msg->pose.pose.orientation.z, msg->pose.pose.orientation.w);
     tf2::Matrix3x3 m(q);
@@ -336,15 +336,15 @@ void NMPCNode::extract_ground_truth_state(const nav_msgs::msg::Odometry::SharedP
     m.getRPY(roll, pitch, yaw);
     double x= msg->pose.pose.position.x;
     double y = msg->pose.pose.position.y;
-    state_init_nmpc_ = casadi::DM({{x}, {y}, {yaw}});
+    state_init_smpc_ = casadi::DM({{x}, {y}, {yaw}});
 }
 
 
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<NMPCNode>());
-    //std::cout<<"ave_compute_time: "<< NMPCNode.ave_compute_time_/NMPCNode.mpc_iter_ <<'\n';
+    rclcpp::spin(std::make_shared<SMPCNode>());
+    //std::cout<<"ave_compute_time: "<< SMPCNode.ave_compute_time_/SSMPCNode.mpc_iter_ <<'\n';
     rclcpp::shutdown();
 }
 
