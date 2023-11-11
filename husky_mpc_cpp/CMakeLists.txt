@@ -47,15 +47,15 @@ find_package(CASADI REQUIRED)
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
 
-add_executable(husky_mpc_node src/mpc_node.cpp src/Nmpc.cpp src/Map.cpp src/mpc_util.cpp src/Robot.cpp)
+add_executable(husky_nmpc_node src/nmpc_node.cpp src/Nmpc.cpp src/Map.cpp src/mpc_util.cpp src/Robot.cpp)
 
-ament_target_dependencies(husky_mpc_node rclcpp geometry_msgs nav_msgs CASADI)
+ament_target_dependencies(husky_nmpc_node rclcpp geometry_msgs nav_msgs CASADI)
 install(TARGETS
-  husky_mpc_node
+  husky_nmpc_node
   DESTINATION lib/${PROJECT_NAME})
 
   
-target_link_libraries(husky_mpc_node ${CASADI_LIBRARIES})
+target_link_libraries(husky_nmpc_node ${CASADI_LIBRARIES})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
