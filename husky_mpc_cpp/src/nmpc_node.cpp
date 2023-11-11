@@ -1,6 +1,6 @@
-#include "husky_mpc_cpp/Map.hpp"
-#include "husky_mpc_cpp/Robot.hpp"
-#include "husky_mpc_cpp/Nmpc.hpp"
+#include "husky_mpc_cpp/map.hpp"
+#include "husky_mpc_cpp/robot.hpp"
+#include "husky_mpc_cpp/nmpc.hpp"
 #include "husky_mpc_cpp/mpc_util.hpp"
 
 #include "rclcpp/rclcpp.hpp"

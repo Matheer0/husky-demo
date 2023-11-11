@@ -1,4 +1,4 @@
-#include "husky_mpc_cpp/Nmpc.hpp"
+#include "husky_mpc_cpp/nmpc.hpp"
 #include <iostream>
 #include <algorithm>    // std::min
 

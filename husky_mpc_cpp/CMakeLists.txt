@@ -47,7 +47,7 @@ find_package(CASADI REQUIRED)
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
 
-add_executable(husky_nmpc_node src/nmpc_node.cpp src/Nmpc.cpp src/Map.cpp src/mpc_util.cpp src/Robot.cpp)
+add_executable(husky_nmpc_node src/nmpc_node.cpp src/nmpc.cpp src/map.cpp src/mpc_util.cpp src/robot.cpp)
 
 ament_target_dependencies(husky_nmpc_node rclcpp geometry_msgs nav_msgs CASADI)
 install(TARGETS

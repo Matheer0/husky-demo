@@ -1,4 +1,4 @@
-#include "husky_mpc_cpp/Map.hpp"
+#include "husky_mpc_cpp/map.hpp"
 
 Obstacle::Obstacle(double x, double y, double radius) : x_(x), y_(y), radius_(radius)
 {

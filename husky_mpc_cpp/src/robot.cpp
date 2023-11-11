@@ -1,4 +1,4 @@
-#include "husky_mpc_cpp/Robot.hpp"
+#include "husky_mpc_cpp/robot.hpp"
 #include <iostream>
 #include <Eigen/Dense>
 
