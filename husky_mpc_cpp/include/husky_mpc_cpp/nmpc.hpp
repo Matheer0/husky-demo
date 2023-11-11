@@ -6,7 +6,7 @@
 #include <map>
 #include <tuple>
 
-#include "husky_mpc_cpp/Map.hpp"
+#include "husky_mpc_cpp/map.hpp"
 
 class NMPC
 {
