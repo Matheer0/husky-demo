@@ -3,7 +3,7 @@
 #include <algorithm>    // std::min
 
 SMPC::SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_controls, const casadi::DM& Q, const casadi::DM& R, 
-            int n_states, int n_controls, int N, double max_linear_acc, double max_angular_acc) : 
+            int n_states, int n_controls, int N, double risk_parameter, double max_linear_acc, double max_angular_acc) : 
         prediction_states_(prediction_states), 
         prediction_controls_(prediction_controls),
         Q_(Q), 
@@ -11,6 +11,7 @@ SMPC::SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_con
         n_states_(n_states), 
         n_controls_(n_controls), 
         N_(N), 
+        risk_parameter_(risk_parameter),
         max_linear_acc_(max_linear_acc), 
         max_angular_acc_(max_angular_acc)
 {

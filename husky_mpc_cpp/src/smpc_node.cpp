@@ -25,9 +25,10 @@ class SMPCNode : public rclcpp::Node
 {
 public:
     SMPCNode();
-    // def update_dynamics(self, current_state, f):
+
     casadi::DM update_dynamics(const casadi::DM& current_state, const casadi::Function& f);
     casadi::DM shift_timestep_ground_truth(const casadi::DM& current_state, const casadi::DM& u, const casadi::Function& f);
+    Eigen::MatrixXd lqr(Eigen::MatrixXd& Q, Eigen::MatrixXd& R, Eigen::MatrixXd& A, Eigen::MatrixXd& B);
     void timer_callback();
     void extract_ground_truth_state(const nav_msgs::msg::Odometry::SharedPtr msg);
 
@@ -35,17 +36,16 @@ public:
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr velocity_publisher_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr ground_truth_subscriber_;
 
-    casadi::DM state_init_;
     casadi::DM state_target_;
     casadi::Function dynamics_function_;
     casadi::DM state_init_smpc_;
+    Eigen::VectorXd state_init_smpc_vector_ = Eigen::VectorXd(3);
     casadi::DM horizon_controls_smpc_;
     casadi::DM horizon_states_smpc_;
     casadi::Function solver_smpc_;
 
-    // TODO: fix Q, R array type
-    casadi::DM Q_array_;
-    casadi::DM R_array_;
+    Eigen::MatrixXd Q_matrix_;
+    Eigen::MatrixXd R_matrix_;
     casadi::DM trajectory_smpc_;
 
     Robot robot_smpc_;
@@ -83,6 +83,15 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     casadi::SX states = vertcat(x, y, theta);   // [x, y, theta]
     n_states_ = states.numel(); // 3 states
 
+    // Control symbolic variables
+    casadi::SX V_a = casadi::SX::sym("V_a");
+    casadi::SX V_b = casadi::SX::sym("V_b");
+    casadi::SX controls = vertcat(V_a, V_b); // [V_a, V_b]
+    n_controls_ = controls.numel(); // get the number of control elements, = 2
+
+    // paramets for SMPC
+    double risk_parameter = 0.7;
+
     dt_ = 0.1;  // time between steps in seconds
     N_ = 100; // number of look ahead steps
 
@@ -111,8 +120,29 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     double R1 = 2;
     double R2 = 3;
     casadi::DM R = diagcat(casadi::DM(R1), R2);
-    Q_array_ = Q;
-    R_array_ = R;
+
+    Eigen::MatrixXd Q_matrix_ = Eigen::MatrixXd::Zero(n_states_, n_states_);
+    //Eigen::MatrixXd Q_matrix_(n_states_, n_states_);
+    Q_matrix_(0,0) = Q_x;
+    Q_matrix_(1,0) = 0;
+    Q_matrix_(2,0) = 0;
+
+    Q_matrix_(0,1) = 0;
+    Q_matrix_(1,1) = Q_y;
+    Q_matrix_(2,1) = 0;
+    
+    Q_matrix_(0,2) = 0;
+    Q_matrix_(1,2) = 0;
+    Q_matrix_(2,2) = Q_theta;
+
+    std::cout << "Q_matrix_ Eigen Matrix:" << std::endl << Q_matrix_ << std::endl;
+
+    Eigen::MatrixXd R_matrix_(n_controls_, n_controls_);
+    R_matrix_(0,0) = R1;
+    R_matrix_(1,0) = 0;
+    R_matrix_(0,1) = 0;
+    R_matrix_(1,1) = R2;
+
 
     // Map Parameters for Long Rooms
     double x_center = 35;
@@ -130,8 +160,9 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
         
 
     // initial and target states of robot
-    state_init_ = casadi::DM({{x_init_}, {y_init}, {theta_init}});
+    state_init_smpc_ = casadi::DM({{x_init_}, {y_init}, {theta_init}});
     state_target_ = casadi::DM({{x_target_}, {y_target}, {theta_target}});
+    state_init_smpc_vector_ << x_init_, y_init, theta_init;
 
     // set up robot
     robot_smpc_ = Robot(0., 0., linear_v_max, angular_v_max);
@@ -140,11 +171,6 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
         x_center, y_center, off_set_);
     map_.generate_circular_obstacles();
 
-    // Control symbolic variables
-    casadi::SX V_a = casadi::SX::sym("V_a");
-    casadi::SX V_b = casadi::SX::sym("V_b");
-    casadi::SX controls = vertcat(V_a, V_b); // [V_a, V_b]
-    n_controls_ = controls.numel(); // get the number of control elements, = 2
 
     // Matrix containing all states over all time steps +1 (each column is a state vector)
     casadi::SX X_smpc = casadi::SX::sym("X", n_states_, N_+1); // nominal mpc
@@ -155,12 +181,12 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     // Maps controls from [va, vb, vc, vd].T to [vx, vy, omega].T, i.e. compute matrix B
     dynamics_function_ = dynamics(states);
 
-
+    //
     // Set up SMPC problem
+    //
     smpc_problem_ = SMPC(X_smpc, U_smpc, Q, R, n_states_, n_controls_, 
-                         N_, linear_acceleration_max, angular_acceleration_max);
+                         N_, risk_parameter, linear_acceleration_max, angular_acceleration_max);
     std::map<std::string, casadi::SX> nlp_prob_smpc = smpc_problem_.define_problem(P, dt_, dynamics_function_, map_.obstacle_list); // Dynamics func here
-    state_init_smpc_ = state_init_;
 
     horizon_controls_smpc_ = casadi::DM::zeros(n_controls_, N_); // initial control
     horizon_states_smpc_ = repmat(state_init_smpc_, 1, N_+1); // initial state full
@@ -187,6 +213,8 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     control_timer_ = this->create_wall_timer(duration, std::bind(&SMPCNode::timer_callback, this));
 }
 
+
+// Unused
 casadi::DM SMPCNode::update_dynamics(const casadi::DM& current_state, const casadi::Function& f)
 {
     casadi::DM rotation_matrix = f(current_state)[0];
@@ -194,6 +222,8 @@ casadi::DM SMPCNode::update_dynamics(const casadi::DM& current_state, const casa
     return matrix_B;
 }
 
+
+// Unused
 casadi::DM SMPCNode::shift_timestep_ground_truth(const casadi::DM &current_state, const casadi::DM &u, const casadi::Function &f)
 {
     casadi::DM rotation_matrix = f(current_state)[0]; // update speed, type: casadi.DM
@@ -201,6 +231,21 @@ casadi::DM SMPCNode::shift_timestep_ground_truth(const casadi::DM &current_state
     casadi::DM next_state = current_state + mtimes(matrix_B, u); // new [x, y, theta]
     return next_state;
 }
+
+
+// TODO: add LQR funtion
+Eigen::MatrixXd SMPCNode::lqr(Eigen::MatrixXd& Q, Eigen::MatrixXd& R, Eigen::MatrixXd& A, Eigen::MatrixXd& B)
+{
+    /*
+    param Q: 3x3
+    param R: 2x2
+    param A: 3x3
+    param Q: 3x2
+    */
+    Eigen::MatrixXd K_star = -(R + B.transpose() * Q * B).inverse() * B.transpose() * Q * A;
+    return K_star;
+}
+
 
 
 void SMPCNode::timer_callback()
@@ -337,6 +382,7 @@ void SMPCNode::extract_ground_truth_state(const nav_msgs::msg::Odometry::SharedP
     double x= msg->pose.pose.position.x;
     double y = msg->pose.pose.position.y;
     state_init_smpc_ = casadi::DM({{x}, {y}, {yaw}});
+    state_init_smpc_vector_ << x, y, yaw;
 }
 
 

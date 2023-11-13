@@ -5,6 +5,7 @@
 #include <vector>
 #include <map>
 #include <tuple>
+#include <Eigen/Dense>
 
 #include "husky_mpc_cpp/map.hpp"
 
@@ -13,8 +14,9 @@ class SMPC
 public:
     SMPC() = default; // default constructor (no arguments)
 
-    SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_controls, const casadi::DM& Q, const casadi::DM& R, int n_states, int n_controls,
-        int N, double max_linear_acc, double max_angular_acc);
+    SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_controls, 
+            const casadi::DM& Q, const casadi::DM& R, int n_states, int n_controls,
+            int N, double risk_parameter, double max_linear_acc, double max_angular_acc);
 
     std::tuple<casadi::SX, casadi::SX> compute_cost(const casadi::SX& P, double time_interval, const casadi::Function& dynamics_function);
     casadi::SX generate_obstacle_avoidance_constraints(const std::vector<Obstacle>& obstacle_list);
@@ -41,6 +43,7 @@ public:
     int n_states_;
     int n_controls_;
     int N_;
+    double risk_parameter_;
     double max_linear_acc_;
     double max_angular_acc_;
 };
