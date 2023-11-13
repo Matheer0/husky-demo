@@ -1,6 +1,7 @@
 #include "husky_mpc_cpp/smpc.hpp"
 #include <iostream>
 #include <algorithm>    // std::min
+#include <boost/math/special_functions/erf.hpp> // error fuinction erf
 
 SMPC::SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_controls, const casadi::DM& Q, const casadi::DM& R, 
             int n_states, int n_controls, int N, double risk_parameter, double max_linear_acc, double max_angular_acc) : 
@@ -147,6 +148,39 @@ std::map<std::string, casadi::DM> SMPC::generate_state_constraints(
     return args_smpc;
 }
 
+
+std::vector<double> SMPC::compute_gamma(Eigen::MatrixXd& A_matrix, Eigen::MatrixXd& B_matrix, Eigen::MatrixXd& K_matrix, Eigen::MatrixXd& dynamics_covariance)
+{
+    std::vector<double> gamma_prediction(N_);
+    Eigen::MatrixXd phi = A_matrix - B_matrix*K_matrix;
+
+    Eigen::MatrixXd g = Eigen::MatrixXd::Zero(1,3);
+    g(0,1) = 1;
+
+    Eigen::MatrixXd prediction_covariance = Eigen::MatrixXd::Zero(3,3);
+    prediction_covariance(0,0) = 1;
+    prediction_covariance(1,1) = 1;
+    prediction_covariance(2,2) = 1;
+
+    for (int k = 0; k < N_; ++k)
+    {
+        // double gamma = sqrt(2*(double)((g * prediction_covariance * g.transpose())[0]));
+        double gamma = (g * prediction_covariance * g.transpose()).value();
+        gamma = sqrt(2*gamma);
+
+        // Compute the inverse error function using Boost
+        // https://www.boost.org/doc/libs/1_83_0/libs/math/doc/html/math_toolkit/sf_erf/error_inv.html
+        double result = boost::math::erf_inv(2*risk_parameter_-1);
+
+        gamma_prediction[k] = gamma*result; 
+
+        // update covariance
+        prediction_covariance = phi*prediction_covariance*phi.transpose() + dynamics_covariance;
+    }
+
+	return gamma_prediction; 
+
+}
 
 
 // Define problem

@@ -44,8 +44,9 @@ public:
     casadi::DM horizon_states_smpc_;
     casadi::Function solver_smpc_;
 
-    Eigen::MatrixXd Q_matrix_;
-    Eigen::MatrixXd R_matrix_;
+    Eigen::MatrixXd Q_matrix_ = Eigen::MatrixXd::Zero(3, 3);
+    Eigen::MatrixXd R_matrix_ = Eigen::MatrixXd::Zero(2, 2);
+    Eigen::MatrixXd A_matrix_ = Eigen::MatrixXd::Zero(3, 3);
     casadi::DM trajectory_smpc_;
 
     Robot robot_smpc_;
@@ -68,7 +69,7 @@ public:
     double min_compute_time_ = 100;
     double max_compute_time_ = 0;
 
-    Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd({{ 0.2, 0.1, 0.1,},
+    Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd({{ 0.2, 0.1, 0.1},
                                                             {0.1, 0.2, 0.1},
                                                             {0.1, 0.1, 0.3}});
 };
@@ -121,8 +122,6 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     double R2 = 3;
     casadi::DM R = diagcat(casadi::DM(R1), R2);
 
-    Eigen::MatrixXd Q_matrix_ = Eigen::MatrixXd::Zero(n_states_, n_states_);
-    //Eigen::MatrixXd Q_matrix_(n_states_, n_states_);
     Q_matrix_(0,0) = Q_x;
     Q_matrix_(1,0) = 0;
     Q_matrix_(2,0) = 0;
@@ -137,11 +136,22 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
 
     std::cout << "Q_matrix_ Eigen Matrix:" << std::endl << Q_matrix_ << std::endl;
 
-    Eigen::MatrixXd R_matrix_(n_controls_, n_controls_);
     R_matrix_(0,0) = R1;
     R_matrix_(1,0) = 0;
     R_matrix_(0,1) = 0;
     R_matrix_(1,1) = R2;
+
+    A_matrix_(0,0) = 1;
+    A_matrix_(1,0) = 0;
+    A_matrix_(2,0) = 0;
+
+    A_matrix_(0,1) = 0;
+    A_matrix_(1,1) = 1;
+    A_matrix_(2,1) = 0;
+    
+    A_matrix_(0,2) = 0;
+    A_matrix_(1,2) = 0;
+    A_matrix_(2,2) = 1;
 
 
     // Map Parameters for Long Rooms
@@ -233,15 +243,15 @@ casadi::DM SMPCNode::shift_timestep_ground_truth(const casadi::DM &current_state
 }
 
 
-// TODO: add LQR funtion
 Eigen::MatrixXd SMPCNode::lqr(Eigen::MatrixXd& Q, Eigen::MatrixXd& R, Eigen::MatrixXd& A, Eigen::MatrixXd& B)
 {
     /*
     param Q: 3x3
     param R: 2x2
     param A: 3x3
-    param Q: 3x2
+    param B: 3x2
     */
+
     Eigen::MatrixXd K_star = -(R + B.transpose() * Q * B).inverse() * B.transpose() * Q * A;
     return K_star;
 }
@@ -271,24 +281,33 @@ void SMPCNode::timer_callback()
 
         // create a standard normal distribution
         std::normal_distribution<double> distribution(0.0, 1.0);
-        Eigen::VectorXd state_noise(n_states_);
+        Eigen::VectorXd noised_state(n_states_);
         for (int j = 0; j < n_states_; j++) {
             // generate random number from normal distribution
-            state_noise(j) = distribution(generator);
+            noised_state(j) = distribution(generator);
         }
         // transform using the Cholesky decomposition of the covariance matrix
-        state_noise = dynamics_covariance_.llt().matrixL() * state_noise;
+        noised_state = dynamics_covariance_.llt().matrixL() * noised_state + state_init_smpc_vector_;
 
-        //std::cout << "Generated state_noise:" << std::endl;
-        //std::cout << state_noise << std::endl;
+        Eigen::MatrixXd B_matrix = Eigen::MatrixXd::Zero(3, 2);
+        B_matrix(0,0) = cos(noised_state(2))*dt_;
+        B_matrix(1,0) = sin(noised_state(2))*dt_;
+        B_matrix(2,0) = 0;
 
-        // convert the Eigen::VectorXd to a CasADi DM
-        casadi::DM dm_noise{std::vector<double>(state_noise.data(), state_noise.size() + state_noise.data())};
+        B_matrix(0,1) = 0;
+        B_matrix(1,1) = 0;
+        B_matrix(2,1) = dt_;
 
-        // now use the CasADi matrix
-        // std::cout << "CasADi DM Matrix:" << std::endl << dm_noise << std::endl;
-        // std::cout << "new state:" << std::endl << state_init_smpc_+ dm_noise << std::endl;
 
+        // CONSTRUCT SMPC CONSTRAINTS
+        Eigen::MatrixXd K_matrix = lqr(Q_matrix_, R_matrix_, A_matrix_, B_matrix);
+        // std::cout << "K_matrix :" << std::endl << K_matrix << std::endl;
+
+
+        std::vector<double> gamma_prediction = smpc_problem_.compute_gamma(A_matrix_, B_matrix, K_matrix, dynamics_covariance_);
+        // std::cout << "gamma_prediction:" << std::endl << gamma_prediction << std::endl;
+        // std::cout << "============================" << std::endl;
+    
 
         auto args_smpc = smpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
@@ -296,7 +315,9 @@ void SMPCNode::timer_callback()
                 robot_smpc_.linear_v_max_, robot_smpc_.angular_v_max_, 
                 max_distance_to_obstacle_, map_.obstacle_list);
 
-        args_smpc["p"] = state_init_smpc_+ dm_noise;
+        // convert the Eigen::VectorXd to a CasADi DM
+        casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
+        args_smpc["p"] = noised_state_dm;
         // target states
         for (int j = 0; j < N_; ++j)
         {

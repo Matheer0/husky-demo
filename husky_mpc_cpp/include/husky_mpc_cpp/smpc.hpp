@@ -28,6 +28,7 @@ public:
                                                                  double max_linear_speed, double max_angular_speed, 
                                                                  double max_safety_distance, const std::vector<Obstacle>& obstacle_list);
 
+    std::vector<double> compute_gamma(Eigen::MatrixXd& A_matrix, Eigen::MatrixXd& B_matrix, Eigen::MatrixXd& K_matrix, Eigen::MatrixXd& dynamics_covariance);
 
     std::map<std::string, casadi::SX> define_problem(const casadi::SX& P, double dt, const casadi::Function& dynamics_function, const std::vector<Obstacle>& obstacle_list);
 
