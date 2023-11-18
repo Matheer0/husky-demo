@@ -72,6 +72,9 @@ public:
     Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd({{ 0.2, 0.1, 0.1},
                                                             {0.1, 0.2, 0.1},
                                                             {0.1, 0.1, 0.3}});
+    
+
+    // Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd::Zero(3, 3);
 };
 
 
@@ -97,7 +100,7 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     N_ = 100; // number of look ahead steps
 
     dt_ = 0.08;  
-    N_ = 50; 
+    N_ = 80; 
 
     //dt_ = 0.1;  
     //N_ = 100;
@@ -154,20 +157,40 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     A_matrix_(2,2) = 1;
 
 
+    // /*
     // Map Parameters for Long Rooms
     double x_center = 35;
     double y_center = 0;
     off_set_ = 5;
+
+    x_target_ = 30;
+    double y_target = 0;
+    double theta_target = 0;
+
+    // Construct reference trajectory
+    x_init_ = 0.;
+    double y_init = 0;
+    double theta_init = 0;
+    // */
+
+
+
+    /*
+    // Map Parameters for Square Rooms
+    double x_center = 10;
+    double y_center = 0;
+    off_set_ = 10;
+
+    x_target_ = 16;
+    double y_target = 7;
+    double theta_target = 1.57;
     
     // Construct reference trajectory
     x_init_ = 0.;
     double y_init = 0;
     double theta_init = 0;
+    */
 
-    x_target_ = 30;
-    double y_target = 0;
-    double theta_target = 0;
-        
 
     // initial and target states of robot
     state_init_smpc_ = casadi::DM({{x_init_}, {y_init}, {theta_init}});
@@ -311,7 +334,7 @@ void SMPCNode::timer_callback()
 
         auto args_smpc = smpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
-                map_.y_lower_limit_, map_.y_upper_limit_, 
+                map_.y_lower_limit_, map_.y_upper_limit_, gamma_prediction,
                 robot_smpc_.linear_v_max_, robot_smpc_.angular_v_max_, 
                 max_distance_to_obstacle_, map_.obstacle_list);
 
@@ -386,7 +409,7 @@ void SMPCNode::timer_callback()
             min_compute_time_ = duration;
         }
         ave_compute_time_ += duration;
-        std::cout<<"smpc duration: "<< duration <<"\n-------------\n";
+        // std::cout<<"smpc duration: "<< duration <<"\n-------------\n";
     } else {
         std::cout<<"smpc max_compute_time: "<< max_compute_time_ <<'\n';
         std::cout<<"smpc min_compute_time: "<< min_compute_time_ <<'\n';

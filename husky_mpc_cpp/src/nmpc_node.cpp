@@ -71,6 +71,9 @@ public:
     Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd({{ 0.2, 0.1, 0.1,},
                                                             {0.1, 0.2, 0.1},
                                                             {0.1, 0.1, 0.3}});
+    
+
+    //Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd::Zero(3, 3);
 };
 
 
@@ -87,7 +90,7 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     N_ = 100; // number of look ahead steps
 
     dt_ = 0.08;  
-    N_ = 50; 
+    N_ = 80; 
 
     //dt_ = 0.1;  
     //N_ = 100;
@@ -114,20 +117,41 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     Q_array_ = Q;
     R_array_ = R;
 
+
+    // /*
     // Map Parameters for Long Rooms
     double x_center = 35;
     double y_center = 0;
     off_set_ = 5;
-    
-    // Construct reference trajectory
-    x_init_ = 0.;
-    double y_init = 0;
-    double theta_init = 0;
 
     x_target_ = 30;
     double y_target = 0;
     double theta_target = 0;
-        
+
+    // Construct reference trajectory
+    x_init_ = 0.;
+    double y_init = 0;
+    double theta_init = 0;
+    // */
+
+
+
+    /*
+    // Map Parameters for Square Rooms
+    double x_center = 10;
+    double y_center = 0;
+    off_set_ = 10;
+
+    x_target_ = 16;
+    double y_target = 7;
+    double theta_target = 1.57;
+
+    // Construct reference trajectory
+    x_init_ = 0.;
+    double y_init = 0;
+    double theta_init = 0;
+    */
+    
 
     // initial and target states of robot
     state_init_ = casadi::DM({{x_init_}, {y_init}, {theta_init}});
