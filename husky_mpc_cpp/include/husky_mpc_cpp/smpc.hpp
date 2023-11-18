@@ -24,11 +24,11 @@ public:
 
 
     std::map<std::string, casadi::DM> generate_state_constraints(double lower_x_constraint, double upper_x_constraint, 
-                                                                 double lower_y_constraint, double upper_y_constraint, 
+                                                                 double lower_y_constraint, double upper_y_constraint, const std::vector<std::vector<double>>& gamma_list,
                                                                  double max_linear_speed, double max_angular_speed, 
                                                                  double max_safety_distance, const std::vector<Obstacle>& obstacle_list);
 
-    std::vector<double> compute_gamma(Eigen::MatrixXd& A_matrix, Eigen::MatrixXd& B_matrix, Eigen::MatrixXd& K_matrix, Eigen::MatrixXd& dynamics_covariance);
+    std::vector<std::vector<double>> compute_gamma(Eigen::MatrixXd& A_matrix, Eigen::MatrixXd& dynamics_covariance);
 
     std::map<std::string, casadi::SX> define_problem(const casadi::SX& P, double dt, const casadi::Function& dynamics_function, const std::vector<Obstacle>& obstacle_list);
 

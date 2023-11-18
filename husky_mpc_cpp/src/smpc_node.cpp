@@ -19,7 +19,7 @@
 #include <cmath>
 #include <Eigen/Dense>
 #include <random>
-
+#define M_PI 3.14159265358979323846
 
 class SMPCNode : public rclcpp::Node
 {
@@ -94,7 +94,7 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     n_controls_ = controls.numel(); // get the number of control elements, = 2
 
     // paramets for SMPC
-    double risk_parameter = 0.7;
+    double risk_parameter = 0.8;
 
     dt_ = 0.1;  // time between steps in seconds
     N_ = 100; // number of look ahead steps
@@ -161,7 +161,7 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     // Map Parameters for Long Rooms
     double x_center = 35;
     double y_center = 0;
-    off_set_ = 5;
+    off_set_ = 50;
 
     x_target_ = 30;
     double y_target = 0;
@@ -311,7 +311,19 @@ void SMPCNode::timer_callback()
         }
         // transform using the Cholesky decomposition of the covariance matrix
         noised_state = dynamics_covariance_.llt().matrixL() * noised_state + state_init_smpc_vector_;
+        // make noised oirentation into proper state space: [-pi, pi]
+        if (noised_state(2) < -M_PI)
+        {   
+            std::cout << "=========" << std::endl;
+            noised_state(2) += 2*M_PI;
+        }
+        if (noised_state(2) > M_PI)
+        {   
+            std::cout << "=======" << std::endl;
+            noised_state(2) -= 2*M_PI;
+        }
 
+        /*
         Eigen::MatrixXd B_matrix = Eigen::MatrixXd::Zero(3, 2);
         B_matrix(0,0) = cos(noised_state(2))*dt_;
         B_matrix(1,0) = sin(noised_state(2))*dt_;
@@ -320,14 +332,14 @@ void SMPCNode::timer_callback()
         B_matrix(0,1) = 0;
         B_matrix(1,1) = 0;
         B_matrix(2,1) = dt_;
+        */
 
 
         // CONSTRUCT SMPC CONSTRAINTS
-        Eigen::MatrixXd K_matrix = lqr(Q_matrix_, R_matrix_, A_matrix_, B_matrix);
+        // Eigen::MatrixXd K_matrix = lqr(Q_matrix_, R_matrix_, A_matrix_, B_matrix);
         // std::cout << "K_matrix :" << std::endl << K_matrix << std::endl;
 
-
-        std::vector<double> gamma_prediction = smpc_problem_.compute_gamma(A_matrix_, B_matrix, K_matrix, dynamics_covariance_);
+        std::vector<std::vector<double>> gamma_prediction = smpc_problem_.compute_gamma(A_matrix_, dynamics_covariance_);
         // std::cout << "gamma_prediction:" << std::endl << gamma_prediction << std::endl;
         // std::cout << "============================" << std::endl;
     
@@ -340,6 +352,7 @@ void SMPCNode::timer_callback()
 
         // convert the Eigen::VectorXd to a CasADi DM
         casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
+        
         args_smpc["p"] = noised_state_dm;
         // target states
         for (int j = 0; j < N_; ++j)
@@ -411,6 +424,12 @@ void SMPCNode::timer_callback()
         ave_compute_time_ += duration;
         // std::cout<<"smpc duration: "<< duration <<"\n-------------\n";
     } else {
+        // PUBLISH VELOCITY TO /husky_velocity_controller/cmd_vel_unstamped
+        geometry_msgs::msg::Twist vel_msg;
+        vel_msg.linear.x = 0;
+        vel_msg.angular.z = 0;
+        velocity_publisher_->publish(vel_msg);
+
         std::cout<<"smpc max_compute_time: "<< max_compute_time_ <<'\n';
         std::cout<<"smpc min_compute_time: "<< min_compute_time_ <<'\n';
         std::cout<<"smpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';

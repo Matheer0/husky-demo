@@ -86,33 +86,31 @@ casadi::SX SMPC::generate_acceleration_constraints(double time_interval)
 
 std::map<std::string, casadi::DM> SMPC::generate_state_constraints(
             double lower_x_constraint, double upper_x_constraint, 
-            double lower_y_constraint, double upper_y_constraint, 
+            double lower_y_constraint, double upper_y_constraint, const std::vector<std::vector<double>>& gamma_list,
             double max_linear_speed, double max_angular_speed, 
             double max_safety_distance, const std::vector<Obstacle>& obstacle_list)
 {
-    // STATE LOWER BOUNDS
-    lbx_(casadi::Slice(0, n_states_*(N_+1), n_states_)) = lower_x_constraint;
-
-    //look up lower y constraints
-    for (int i = 0; i < N_+1; ++i)
-    {
-        lbx_(1 + n_states_*i) = lower_y_constraint;
-    }
     //constraint for theta
     lbx_(casadi::Slice(2, n_states_*(N_+1), n_states_)) = -casadi::pi;
-
-
-    // STATE UPPER BOUNDS
-    ubx_(casadi::Slice(0, n_states_*(N_+1), n_states_)) = upper_x_constraint;
-
-    //look up upper y constraints
-    for (int i = 0; i < N_+1; ++i)
-    {
-        ubx_(1 + n_states_*i) = upper_y_constraint;
-    }
     ubx_(casadi::Slice(2, n_states_*(N_+1), n_states_)) = casadi::pi;
 
+    // lower and upper bounds for x and y
+    for (int i = 0; i < N_; ++i)
+    {   
+        lbx_(0 + n_states_*i) = lower_x_constraint + gamma_list[0][i];
+        lbx_(1 + n_states_*i) = lower_y_constraint + gamma_list[1][i];
 
+
+        ubx_(0 + n_states_*i) = upper_x_constraint - gamma_list[0][i];
+        ubx_(1 + n_states_*i) = upper_y_constraint - gamma_list[1][i];
+    }
+
+    lbx_(0 + n_states_*N_) = lower_x_constraint + gamma_list[0][N_-1];
+    lbx_(1 + n_states_*N_) = lower_y_constraint + gamma_list[1][N_-1];
+
+    ubx_(0 + n_states_*N_) = upper_x_constraint - gamma_list[0][N_-1];
+    ubx_(1 + n_states_*N_) = upper_y_constraint - gamma_list[1][N_-1];
+    
 
     // LOWER and UPPER BOUNDS for CONTROL u
     for (int k = 0; k < N_; ++k)
@@ -129,6 +127,19 @@ std::map<std::string, casadi::DM> SMPC::generate_state_constraints(
         min_distance = vertcat(casadi::DM(min_distance), 
                             obstacle.radius_*casadi::DM::ones(N_, 1)); // append minimum safety distance to current obstacle
     }
+
+
+    ///*
+    for (size_t i = 0; i < obstacle_list.size(); ++i)
+    {
+        for (int j = 0; j < N_; ++j)
+        {
+            min_distance(i*N_ +j)+= sqrt(pow(gamma_list[0][j],2) + pow(gamma_list[1][j],2));
+        }
+
+    }
+    //*/
+
 
     std::map<std::string, casadi::DM> args_smpc = {
         {"lbg", vertcat(min_distance, 
@@ -149,35 +160,51 @@ std::map<std::string, casadi::DM> SMPC::generate_state_constraints(
 }
 
 
-std::vector<double> SMPC::compute_gamma(Eigen::MatrixXd& A_matrix, Eigen::MatrixXd& B_matrix, Eigen::MatrixXd& K_matrix, Eigen::MatrixXd& dynamics_covariance)
+std::vector<std::vector<double>> SMPC::compute_gamma(Eigen::MatrixXd& A_matrix, Eigen::MatrixXd& dynamics_covariance)
 {
-    std::vector<double> gamma_prediction(N_);
-    Eigen::MatrixXd phi = A_matrix - B_matrix*K_matrix;
+    std::vector<std::vector<double>> gamma_prediction(3, std::vector<double>(N_, 0));
 
-    Eigen::MatrixXd g = Eigen::MatrixXd::Zero(1,3);
-    g(0,1) = 1;
+    // filter matrix
+    Eigen::MatrixXd g_x = Eigen::MatrixXd::Zero(3,1);
+    g_x(0,0) = 1;
+    Eigen::MatrixXd g_y = Eigen::MatrixXd::Zero(3,1);
+    g_y(1) = 1;
+    Eigen::MatrixXd g_theta = Eigen::MatrixXd::Zero(3,1);
+    g_theta(2) = 1;
 
+    //sigma_k initialization
     Eigen::MatrixXd prediction_covariance = Eigen::MatrixXd::Zero(3,3);
-    prediction_covariance(0,0) = 1;
-    prediction_covariance(1,1) = 1;
-    prediction_covariance(2,2) = 1;
 
-    for (int k = 0; k < N_; ++k)
-    {
-        // double gamma = sqrt(2*(double)((g * prediction_covariance * g.transpose())[0]));
-        double gamma = (g * prediction_covariance * g.transpose()).value();
-        gamma = sqrt(2*gamma);
+    //G_k, 3x3 identity matrix
+    Eigen::MatrixXd G_k = Eigen::Matrix3d::Identity();
+
+    for (int k=0; k<N_; ++k)
+    {   
+        // update covariance in prediction horizon: step k+1
+        prediction_covariance = A_matrix*prediction_covariance*A_matrix.transpose() + G_k*dynamics_covariance*G_k.transpose();
 
         // Compute the inverse error function using Boost
         // https://www.boost.org/doc/libs/1_83_0/libs/math/doc/html/math_toolkit/sf_erf/error_inv.html
-        double result = boost::math::erf_inv(2*risk_parameter_-1);
+        double risk_parameter = boost::math::erf_inv(2*risk_parameter_-1);
 
-        gamma_prediction[k] = gamma*result; 
+        double gamma_x = (g_x.transpose() * prediction_covariance * g_x).value();
+        gamma_x = sqrt(2*gamma_x);
 
-        // update covariance
-        prediction_covariance = phi*prediction_covariance*phi.transpose() + dynamics_covariance;
+        double gamma_y = (g_y.transpose() * prediction_covariance * g_y).value();
+        gamma_y = sqrt(2*gamma_y);
+
+        double gamma_theta = (g_theta.transpose() * prediction_covariance * g_theta).value();
+        gamma_theta = sqrt(2*gamma_theta);
+
+        
+        gamma_prediction[0][k] = gamma_x*risk_parameter; 
+        gamma_prediction[1][k] = gamma_y*risk_parameter; 
+        gamma_prediction[2][k] = gamma_theta*risk_parameter; 
+
+        // N=100: gamma_prediction[N] ~= 5.13
+        
     }
-
+    // std::cout<< gamma_prediction<< std::endl;
 	return gamma_prediction; 
 
 }
