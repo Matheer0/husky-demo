@@ -2,9 +2,11 @@
 #include <iostream>
 #include <algorithm>    // std::min
 #include <boost/math/special_functions/erf.hpp> // error fuinction erf
+#define chi_squared 5.99146 //for alpha=0.05 with 2 DoF
 
 SMPC::SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_controls, const casadi::DM& Q, const casadi::DM& R, 
-            int n_states, int n_controls, int N, double risk_parameter, double max_linear_acc, double max_angular_acc) : 
+            int n_states, int n_controls, int N, double state_safety_probability, double obstacle_avoidance_safety_probability,
+            double max_linear_acc, double max_angular_acc) : 
         prediction_states_(prediction_states), 
         prediction_controls_(prediction_controls),
         Q_(Q), 
@@ -12,7 +14,8 @@ SMPC::SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_con
         n_states_(n_states), 
         n_controls_(n_controls), 
         N_(N), 
-        risk_parameter_(risk_parameter),
+        state_safety_probability_(state_safety_probability),
+        obstacle_avoidance_safety_probability_(obstacle_avoidance_safety_probability),
         max_linear_acc_(max_linear_acc), 
         max_angular_acc_(max_angular_acc)
 {
@@ -86,9 +89,11 @@ casadi::SX SMPC::generate_acceleration_constraints(double time_interval)
 
 std::map<std::string, casadi::DM> SMPC::generate_state_constraints(
             double lower_x_constraint, double upper_x_constraint, 
-            double lower_y_constraint, double upper_y_constraint, const std::vector<std::vector<double>>& gamma_list,
+            double lower_y_constraint, double upper_y_constraint,
             double max_linear_speed, double max_angular_speed, 
-            double max_safety_distance, const std::vector<Obstacle>& obstacle_list)
+            double extra_distance, double max_safety_distance, 
+            const std::vector<std::vector<double>>& gamma_list, 
+            const std::vector<Obstacle>& obstacle_list)
 {
     //constraint for theta
     lbx_(casadi::Slice(2, n_states_*(N_+1), n_states_)) = -casadi::pi;
@@ -134,7 +139,11 @@ std::map<std::string, casadi::DM> SMPC::generate_state_constraints(
     {
         for (int j = 0; j < N_; ++j)
         {
-            min_distance(i*N_ +j)+= sqrt(pow(gamma_list[0][j],2) + pow(gamma_list[1][j],2));
+            //min_distance(i*N_ +j)+= sqrt(pow(gamma_list[0][j],2) + pow(gamma_list[1][j],2));
+
+            // Stochastic Obstacle Avoidance 
+            // equation [2] in https://ieeexplore.ieee.org/document/7487661 
+            min_distance(i*N_ +j) += std::min(gamma_list[3][j], extra_distance);
         }
 
     }
@@ -161,8 +170,9 @@ std::map<std::string, casadi::DM> SMPC::generate_state_constraints(
 
 
 std::vector<std::vector<double>> SMPC::compute_gamma(Eigen::MatrixXd& A_matrix, Eigen::MatrixXd& dynamics_covariance)
-{
-    std::vector<std::vector<double>> gamma_prediction(3, std::vector<double>(N_, 0));
+{   
+    // Theory From: https://www.diva-portal.org/smash/get/diva2:1602269/FULLTEXT01.pdf
+    std::vector<std::vector<double>> gamma_prediction(4, std::vector<double>(N_, 0));
 
     // filter matrix
     Eigen::MatrixXd g_x = Eigen::MatrixXd::Zero(3,1);
@@ -185,21 +195,26 @@ std::vector<std::vector<double>> SMPC::compute_gamma(Eigen::MatrixXd& A_matrix, 
 
         // Compute the inverse error function using Boost
         // https://www.boost.org/doc/libs/1_83_0/libs/math/doc/html/math_toolkit/sf_erf/error_inv.html
-        double risk_parameter = boost::math::erf_inv(2*risk_parameter_-1);
+        double obstacle_risk_parameter = boost::math::erf_inv(2*state_safety_probability_-1);
 
+        // compute accumulated variances for x, y and theta
         double gamma_x = (g_x.transpose() * prediction_covariance * g_x).value();
-        gamma_x = sqrt(2*gamma_x);
-
         double gamma_y = (g_y.transpose() * prediction_covariance * g_y).value();
-        gamma_y = sqrt(2*gamma_y);
-
         double gamma_theta = (g_theta.transpose() * prediction_covariance * g_theta).value();
-        gamma_theta = sqrt(2*gamma_theta);
+        // compute variances for obstacle avoidance
+        double gamma_obs = std::max(gamma_x, gamma_y);
 
-        
-        gamma_prediction[0][k] = gamma_x*risk_parameter; 
-        gamma_prediction[1][k] = gamma_y*risk_parameter; 
-        gamma_prediction[2][k] = gamma_theta*risk_parameter; 
+
+        gamma_x = sqrt(2*gamma_x);
+        gamma_y = sqrt(2*gamma_y);
+        gamma_theta = sqrt(2*gamma_theta);
+        gamma_prediction[0][k] = gamma_x*obstacle_risk_parameter; 
+        gamma_prediction[1][k] = gamma_y*obstacle_risk_parameter; 
+        gamma_prediction[2][k] = gamma_theta*obstacle_risk_parameter; 
+
+
+        // lower error bound for obstacle avoidance, https://ieeexplore.ieee.org/document/7487661 
+        gamma_prediction[3][k] = sqrt(chi_squared*(1-obstacle_avoidance_safety_probability_)*gamma_obs);
 
         // N=100: gamma_prediction[N] ~= 5.13
         

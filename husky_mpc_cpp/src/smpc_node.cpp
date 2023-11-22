@@ -44,8 +44,6 @@ public:
     casadi::DM horizon_states_smpc_;
     casadi::Function solver_smpc_;
 
-    Eigen::MatrixXd Q_matrix_ = Eigen::MatrixXd::Zero(3, 3);
-    Eigen::MatrixXd R_matrix_ = Eigen::MatrixXd::Zero(2, 2);
     Eigen::MatrixXd A_matrix_ = Eigen::MatrixXd::Zero(3, 3);
     casadi::DM trajectory_smpc_;
 
@@ -60,6 +58,7 @@ public:
 
     double stop_distance_;
     double max_distance_to_obstacle_;
+    double obstacle_extra_distance_;
     double off_set_;
     double dt_;
     double x_init_;
@@ -93,8 +92,12 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     casadi::SX controls = vertcat(V_a, V_b); // [V_a, V_b]
     n_controls_ = controls.numel(); // get the number of control elements, = 2
 
-    // paramets for SMPC
-    double risk_parameter = 0.8;
+    // safety paramets for SMPC
+    double state_safety_probability = 0.8;
+    double obstacle_avoidance_safety_probability = 0.95;
+
+    obstacle_extra_distance_ = 2.0;
+    max_distance_to_obstacle_ = 15.0;
 
     dt_ = 0.1;  // time between steps in seconds
     N_ = 100; // number of look ahead steps
@@ -125,41 +128,14 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     double R2 = 3;
     casadi::DM R = diagcat(casadi::DM(R1), R2);
 
-    Q_matrix_(0,0) = Q_x;
-    Q_matrix_(1,0) = 0;
-    Q_matrix_(2,0) = 0;
-
-    Q_matrix_(0,1) = 0;
-    Q_matrix_(1,1) = Q_y;
-    Q_matrix_(2,1) = 0;
-    
-    Q_matrix_(0,2) = 0;
-    Q_matrix_(1,2) = 0;
-    Q_matrix_(2,2) = Q_theta;
-
-    std::cout << "Q_matrix_ Eigen Matrix:" << std::endl << Q_matrix_ << std::endl;
-
-    R_matrix_(0,0) = R1;
-    R_matrix_(1,0) = 0;
-    R_matrix_(0,1) = 0;
-    R_matrix_(1,1) = R2;
-
     A_matrix_(0,0) = 1;
-    A_matrix_(1,0) = 0;
-    A_matrix_(2,0) = 0;
-
-    A_matrix_(0,1) = 0;
     A_matrix_(1,1) = 1;
-    A_matrix_(2,1) = 0;
-    
-    A_matrix_(0,2) = 0;
-    A_matrix_(1,2) = 0;
     A_matrix_(2,2) = 1;
 
 
     // /*
     // Map Parameters for Long Rooms
-    double x_center = 35;
+    double x_center = 40;
     double y_center = 0;
     off_set_ = 50;
 
@@ -218,7 +194,8 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     // Set up SMPC problem
     //
     smpc_problem_ = SMPC(X_smpc, U_smpc, Q, R, n_states_, n_controls_, 
-                         N_, risk_parameter, linear_acceleration_max, angular_acceleration_max);
+                         N_, state_safety_probability, obstacle_avoidance_safety_probability, 
+                         linear_acceleration_max, angular_acceleration_max);
     std::map<std::string, casadi::SX> nlp_prob_smpc = smpc_problem_.define_problem(P, dt_, dynamics_function_, map_.obstacle_list); // Dynamics func here
 
     horizon_controls_smpc_ = casadi::DM::zeros(n_controls_, N_); // initial control
@@ -237,7 +214,6 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
 
     mpc_iter_ = 0;
     stop_distance_ = 0.5;
-    max_distance_to_obstacle_ = 15.0;
     RCLCPP_INFO(this->get_logger(), "Finishing initialization");
 
     velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 1);
@@ -265,19 +241,6 @@ casadi::DM SMPCNode::shift_timestep_ground_truth(const casadi::DM &current_state
     return next_state;
 }
 
-
-Eigen::MatrixXd SMPCNode::lqr(Eigen::MatrixXd& Q, Eigen::MatrixXd& R, Eigen::MatrixXd& A, Eigen::MatrixXd& B)
-{
-    /*
-    param Q: 3x3
-    param R: 2x2
-    param A: 3x3
-    param B: 3x2
-    */
-
-    Eigen::MatrixXd K_star = -(R + B.transpose() * Q * B).inverse() * B.transpose() * Q * A;
-    return K_star;
-}
 
 
 
@@ -323,32 +286,18 @@ void SMPCNode::timer_callback()
             noised_state(2) -= 2*M_PI;
         }
 
-        /*
-        Eigen::MatrixXd B_matrix = Eigen::MatrixXd::Zero(3, 2);
-        B_matrix(0,0) = cos(noised_state(2))*dt_;
-        B_matrix(1,0) = sin(noised_state(2))*dt_;
-        B_matrix(2,0) = 0;
-
-        B_matrix(0,1) = 0;
-        B_matrix(1,1) = 0;
-        B_matrix(2,1) = dt_;
-        */
-
 
         // CONSTRUCT SMPC CONSTRAINTS
-        // Eigen::MatrixXd K_matrix = lqr(Q_matrix_, R_matrix_, A_matrix_, B_matrix);
-        // std::cout << "K_matrix :" << std::endl << K_matrix << std::endl;
-
         std::vector<std::vector<double>> gamma_prediction = smpc_problem_.compute_gamma(A_matrix_, dynamics_covariance_);
         // std::cout << "gamma_prediction:" << std::endl << gamma_prediction << std::endl;
         // std::cout << "============================" << std::endl;
-    
 
         auto args_smpc = smpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
-                map_.y_lower_limit_, map_.y_upper_limit_, gamma_prediction,
+                map_.y_lower_limit_, map_.y_upper_limit_,
                 robot_smpc_.linear_v_max_, robot_smpc_.angular_v_max_, 
-                max_distance_to_obstacle_, map_.obstacle_list);
+                obstacle_extra_distance_, max_distance_to_obstacle_, 
+                gamma_prediction, map_.obstacle_list);
 
         // convert the Eigen::VectorXd to a CasADi DM
         casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
