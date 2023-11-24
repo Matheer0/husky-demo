@@ -38,6 +38,7 @@ public:
     std::vector<Obstacle> dummy_obstacles;
 
     void generate_circular_obstacles();
+    Obstacle compute_obstacle_grouping(Obstacle ob1, Obstacle ob2);
 };
 
 #endif // MAP_HPP
