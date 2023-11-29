@@ -55,6 +55,7 @@ public:
     int N_; // number of look ahead steps
     int n_controls_; // Number of control inputs
     int mpc_iter_;
+    int timing_violation_ = 0;
 
     double stop_distance_;
     double max_distance_to_obstacle_;
@@ -94,17 +95,17 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
 
     // safety paramets for SMPC
     double state_safety_probability = 0.8;
-    double orientation_safety_probability = 0.7;    // working value: 0.6
+    double orientation_safety_probability = 0.7;    // working value: 0.7
     double obstacle_avoidance_safety_probability = 0.95;
 
     obstacle_extra_distance_ = 1.0;
-    max_distance_to_obstacle_ = 15.0;
+    max_distance_to_obstacle_ = 1000.0; 
 
     dt_ = 0.1;  // time between steps in seconds
     N_ = 100; // number of look ahead steps
 
-    dt_ = 0.08;  
-    N_ = 80; 
+    dt_ = 0.05;  
+    N_ = 50; 
 
     //dt_ = 0.1;  
     //N_ = 100;
@@ -145,7 +146,7 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     double theta_target = 0;
 
     // Construct reference trajectory
-    x_init_ = 0.;
+    x_init_ = 0;
     double y_init = 0;
     double theta_init = 0;
     //*/
@@ -372,6 +373,9 @@ void SMPCNode::timer_callback()
         if (duration < min_compute_time_){
             min_compute_time_ = duration;
         }
+        if (duration > dt_){
+            timing_violation_ += 1;
+        }
         ave_compute_time_ += duration;
         // std::cout<<"smpc duration: "<< duration <<"\n-------------\n";
     } else {
@@ -383,6 +387,7 @@ void SMPCNode::timer_callback()
 
         std::cout<<"smpc max_compute_time: "<< max_compute_time_ <<'\n';
         std::cout<<"smpc min_compute_time: "<< min_compute_time_ <<'\n';
+        std::cout<<"violations: "<< timing_violation_ <<'\n';
         std::cout<<"smpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
     }
 }
