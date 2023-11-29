@@ -15,8 +15,9 @@ public:
     SMPC() = default; // default constructor (no arguments)
 
     SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_controls, 
-            const casadi::DM& Q, const casadi::DM& R, int n_states, int n_controls,
-            int N, double state_safety_probability, double obstacle_avoidance_safety_probability,
+            const casadi::DM& Q, const casadi::DM& R, 
+            int n_states, int n_controls, int N, 
+            double state_safety_probability, double orientation_safety_probability,double obstacle_avoidance_safety_probability,
             double max_linear_acc, double max_angular_acc);
 
     std::tuple<casadi::SX, casadi::SX> compute_cost(const casadi::SX& P, double time_interval, const casadi::Function& dynamics_function);
@@ -48,6 +49,7 @@ public:
     int n_controls_;
     int N_;
     double state_safety_probability_;
+    double orientation_safety_probability_;
     double obstacle_avoidance_safety_probability_;
     double max_linear_acc_;
     double max_angular_acc_;

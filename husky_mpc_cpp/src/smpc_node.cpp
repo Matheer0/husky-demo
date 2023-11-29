@@ -94,9 +94,10 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
 
     // safety paramets for SMPC
     double state_safety_probability = 0.8;
+    double orientation_safety_probability = 0.7;    // working value: 0.6
     double obstacle_avoidance_safety_probability = 0.95;
 
-    obstacle_extra_distance_ = 2.0;
+    obstacle_extra_distance_ = 1.0;
     max_distance_to_obstacle_ = 15.0;
 
     dt_ = 0.1;  // time between steps in seconds
@@ -133,11 +134,11 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     A_matrix_(2,2) = 1;
 
 
-    // /*
+    ///*
     // Map Parameters for Long Rooms
     double x_center = 40;
     double y_center = 0;
-    off_set_ = 50;
+    off_set_ = 10;
 
     x_target_ = 30;
     double y_target = 0;
@@ -147,7 +148,7 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     x_init_ = 0.;
     double y_init = 0;
     double theta_init = 0;
-    // */
+    //*/
 
 
 
@@ -157,14 +158,14 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     double y_center = 0;
     off_set_ = 10;
 
-    x_target_ = 16;
-    double y_target = 7;
-    double theta_target = 1.57;
+    x_target_ = 17;
+    double y_target = 0;
+    double theta_target = 0;
     
     // Construct reference trajectory
-    x_init_ = 0.;
-    double y_init = 0;
-    double theta_init = 0;
+    x_init_ = 2.;
+    double y_init = -8;
+    double theta_init = 1.6;
     */
 
 
@@ -193,8 +194,9 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     //
     // Set up SMPC problem
     //
-    smpc_problem_ = SMPC(X_smpc, U_smpc, Q, R, n_states_, n_controls_, 
-                         N_, state_safety_probability, obstacle_avoidance_safety_probability, 
+    smpc_problem_ = SMPC(X_smpc, U_smpc, Q, R, 
+                         n_states_, n_controls_, N_, 
+                         state_safety_probability, orientation_safety_probability, obstacle_avoidance_safety_probability, 
                          linear_acceleration_max, angular_acceleration_max);
     std::map<std::string, casadi::SX> nlp_prob_smpc = smpc_problem_.define_problem(P, dt_, dynamics_function_, map_.obstacle_list); // Dynamics func here
 

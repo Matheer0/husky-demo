@@ -5,7 +5,8 @@
 #define chi_squared 5.99146 //for alpha=0.05 with 2 DoF
 
 SMPC::SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_controls, const casadi::DM& Q, const casadi::DM& R, 
-            int n_states, int n_controls, int N, double state_safety_probability, double obstacle_avoidance_safety_probability,
+            int n_states, int n_controls, int N, 
+            double state_safety_probability, double orientation_safety_probability,double obstacle_avoidance_safety_probability,
             double max_linear_acc, double max_angular_acc) : 
         prediction_states_(prediction_states), 
         prediction_controls_(prediction_controls),
@@ -15,6 +16,7 @@ SMPC::SMPC(const casadi::SX& prediction_states, const casadi::SX& prediction_con
         n_controls_(n_controls), 
         N_(N), 
         state_safety_probability_(state_safety_probability),
+        orientation_safety_probability_(orientation_safety_probability),
         obstacle_avoidance_safety_probability_(obstacle_avoidance_safety_probability),
         max_linear_acc_(max_linear_acc), 
         max_angular_acc_(max_angular_acc)
@@ -96,25 +98,28 @@ std::map<std::string, casadi::DM> SMPC::generate_state_constraints(
             const std::vector<Obstacle>& obstacle_list)
 {
     //constraint for theta
-    lbx_(casadi::Slice(2, n_states_*(N_+1), n_states_)) = -casadi::pi;
-    ubx_(casadi::Slice(2, n_states_*(N_+1), n_states_)) = casadi::pi;
+    //lbx_(casadi::Slice(2, n_states_*(N_+1), n_states_)) = -casadi::pi;
+    //ubx_(casadi::Slice(2, n_states_*(N_+1), n_states_)) = casadi::pi;
 
-    // lower and upper bounds for x and y
+    // lower and upper bounds for x, y and theta
     for (int i = 0; i < N_; ++i)
     {   
         lbx_(0 + n_states_*i) = lower_x_constraint + gamma_list[0][i];
         lbx_(1 + n_states_*i) = lower_y_constraint + gamma_list[1][i];
-
+        lbx_(2 + n_states_*i) = -casadi::pi + gamma_list[2][i];
 
         ubx_(0 + n_states_*i) = upper_x_constraint - gamma_list[0][i];
         ubx_(1 + n_states_*i) = upper_y_constraint - gamma_list[1][i];
+        ubx_(2 + n_states_*i) = casadi::pi - gamma_list[2][i];
     }
 
     lbx_(0 + n_states_*N_) = lower_x_constraint + gamma_list[0][N_-1];
     lbx_(1 + n_states_*N_) = lower_y_constraint + gamma_list[1][N_-1];
+    lbx_(2 + n_states_*N_) = -casadi::pi + gamma_list[2][N_-1];
 
     ubx_(0 + n_states_*N_) = upper_x_constraint - gamma_list[0][N_-1];
     ubx_(1 + n_states_*N_) = upper_y_constraint - gamma_list[1][N_-1];
+    ubx_(2 + n_states_*N_) = casadi::pi - gamma_list[2][N_-1];
     
 
     // LOWER and UPPER BOUNDS for CONTROL u
@@ -188,14 +193,15 @@ std::vector<std::vector<double>> SMPC::compute_gamma(Eigen::MatrixXd& A_matrix, 
     //G_k, 3x3 identity matrix
     Eigen::MatrixXd G_k = Eigen::Matrix3d::Identity();
 
+    // Compute the inverse error function using Boost
+    // https://www.boost.org/doc/libs/1_83_0/libs/math/doc/html/math_toolkit/sf_erf/error_inv.html
+    double state_risk_parameter = boost::math::erf_inv(2*state_safety_probability_-1);
+    double orientation_risk_parameter = boost::math::erf_inv(2*orientation_safety_probability_-1);
+
     for (int k=0; k<N_; ++k)
     {   
         // update covariance in prediction horizon: step k+1
         prediction_covariance = A_matrix*prediction_covariance*A_matrix.transpose() + G_k*dynamics_covariance*G_k.transpose();
-
-        // Compute the inverse error function using Boost
-        // https://www.boost.org/doc/libs/1_83_0/libs/math/doc/html/math_toolkit/sf_erf/error_inv.html
-        double obstacle_risk_parameter = boost::math::erf_inv(2*state_safety_probability_-1);
 
         // compute accumulated variances for x, y and theta
         double gamma_x = (g_x.transpose() * prediction_covariance * g_x).value();
@@ -208,9 +214,9 @@ std::vector<std::vector<double>> SMPC::compute_gamma(Eigen::MatrixXd& A_matrix, 
         gamma_x = sqrt(2*gamma_x);
         gamma_y = sqrt(2*gamma_y);
         gamma_theta = sqrt(2*gamma_theta);
-        gamma_prediction[0][k] = gamma_x*obstacle_risk_parameter; 
-        gamma_prediction[1][k] = gamma_y*obstacle_risk_parameter; 
-        gamma_prediction[2][k] = gamma_theta*obstacle_risk_parameter; 
+        gamma_prediction[0][k] = gamma_x*state_risk_parameter; 
+        gamma_prediction[1][k] = gamma_y*state_risk_parameter; 
+        gamma_prediction[2][k] = gamma_theta*orientation_risk_parameter; 
 
 
         // lower error bound for obstacle avoidance, https://ieeexplore.ieee.org/document/7487661 
