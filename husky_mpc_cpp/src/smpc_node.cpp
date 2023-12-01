@@ -144,7 +144,7 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     // Map Parameters for Long Rooms
     double x_center = 40;
     double y_center = 0;
-    off_set_ = 10;
+    off_set_ = 5;
 
     x_target_ = 30;
     double y_target = 0;
@@ -256,7 +256,8 @@ void SMPCNode::timer_callback()
     //RCLCPP_INFO_STREAM(this->get_logger(), state_init_smpc_ << "\n-------------");
 
     auto mask = casadi::DM({{1, 0, 0}, {0, 1, 0}}); // Mask to extract x and y coordinates from state vector
-    if ((double)norm_2(mtimes(mask, state_init_smpc_) - mtimes(mask, state_target_)) > stop_distance_)
+    double distance_to_target = (double)norm_2(mtimes(mask, state_init_smpc_) - mtimes(mask, state_target_));
+    if (distance_to_target > stop_distance_)
     {   
         // timing computation time
         std::clock_t start = std::clock();
