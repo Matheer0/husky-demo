@@ -65,7 +65,7 @@
       </ros>
       <frame_name>map</frame_name>
       <body_name>base_link</body_name>
-      <update_rate>5.0</update_rate>
+      <update_rate>100</update_rate>
     </plugin>
   </gazebo>  
 
