@@ -76,6 +76,12 @@ public:
                                                             {0.1, 0.2, 0.1},
                                                             {0.1, 0.1, 0.3}});
     
+    // new for edge case
+    NMPC edge_nmpc_problem_;
+    int edge_N_; 
+    casadi::DM edge_horizon_controls_nmpc_;
+    casadi::DM edge_horizon_states_nmpc_;
+    casadi::Function edge_solver_nmpc_;
 
     //Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd::Zero(3, 3);
 };
@@ -102,8 +108,9 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     N_ = 100; // number of look ahead steps
 
     dt_ = 0.05;  
-    N_ = 50; 
+    N_ = 40; 
 
+    edge_N_ = 1; 
     //dt_ = 0.1;  
     //N_ = 100;
 
@@ -116,8 +123,6 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     double angular_v_max = 2.0; // rad/s, default 2.0
     double angular_acceleration_max = 6.0; // rad/s^2, default 6.0
 
-    // coloumn vector for storing initial state and target state
-    casadi::SX P = casadi::SX::sym("P", n_states_ + n_states_*N_); // robot state + N reference states, self.n_states*(N+1) * 1 list
     
     double Q_x = 1;
     double Q_y = 1;
@@ -132,9 +137,9 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     // Map Parameters for Long Rooms
     double x_center = 40;
     double y_center = 0;
-    off_set_ = 5;
+    off_set_ = 10;
 
-    x_target_ = 30;
+    x_target_ = 5;
     double y_target = 0;
     double theta_target = 0;
 
@@ -182,6 +187,9 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     // Matrix containing all control actions over all time steps (each column is an action vector)
     casadi::SX U_nmpc = casadi::SX::sym("U", n_controls_, N_);
 
+    // coloumn vector for storing initial state and target state
+    casadi::SX P = casadi::SX::sym("P", n_states_ + n_states_*N_); // robot state + N reference states, self.n_states*(N+1) * 1 list
+
     // Maps controls from [va, vb, vc, vd].T to [vx, vy, omega].T, i.e. compute matrix B
     dynamics_function_ = dynamics(states);
 
@@ -205,8 +213,36 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
     opts["print_time"] = 0;
     solver_nmpc_ = casadi::nlpsol("solver", "ipopt", nlp_prob_nmpc, opts);
 
+
+
+    // new nmpc problem for edge case
+    //
+    // Set up NMPC problem
+    //
+
+    // Matrix containing all states over all time steps +1 (each column is a state vector)
+    casadi::SX edge_X_nmpc = casadi::SX::sym("X", n_states_, edge_N_+1); // nominal mpc
+
+    // Matrix containing all control actions over all time steps (each column is an action vector)
+    casadi::SX edge_U_nmpc = casadi::SX::sym("U", n_controls_, edge_N_);
+
+    // coloumn vector for storing initial state and target state
+    casadi::SX edge_P = casadi::SX::sym("P", n_states_ + n_states_*edge_N_); // robot state + N reference states, self.n_states*(N+1) * 1 list
+
+    edge_nmpc_problem_ = NMPC(edge_X_nmpc, edge_U_nmpc, Q, R, n_states_, n_controls_, 
+                         edge_N_, linear_acceleration_max, angular_acceleration_max);
+    std::map<std::string, casadi::SX> edge_nlp_prob_nmpc = edge_nmpc_problem_.define_problem(edge_P, dt_, dynamics_function_, map_.obstacle_list); // Dynamics func here
+
+    edge_horizon_controls_nmpc_ = casadi::DM::zeros(n_controls_, edge_N_); // initial control
+    edge_horizon_states_nmpc_ = repmat(state_target_, 1, edge_N_+1); // initial state full
+
+    
+    edge_solver_nmpc_ = casadi::nlpsol("solver", "ipopt", edge_nlp_prob_nmpc, opts);
+    // new nmpc problem for edge case above
+
+
     mpc_iter_ = 0;
-    stop_distance_ = 0.5;
+    stop_distance_ = 0.3;
     RCLCPP_INFO(this->get_logger(), "Finishing initialization");
 
     velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 1);
@@ -242,8 +278,10 @@ void NMPCNode::timer_callback()
     //RCLCPP_INFO_STREAM(this->get_logger(), state_init_nmpc_ << "\n-------------");
 
     auto mask = casadi::DM({{1, 0, 0}, {0, 1, 0}}); // Mask to extract x and y coordinates from state vector
-    if ((double)norm_2(mtimes(mask, state_init_nmpc_) - mtimes(mask, state_target_)) > stop_distance_)
+    double distance_to_target = (double)norm_2(mtimes(mask, state_init_nmpc_) - mtimes(mask, state_target_));
+    if (distance_to_target > stop_distance_)
     {   
+        std::cout << distance_to_target << std::endl;
         // timing computation time
         std::clock_t start = std::clock();
 
@@ -280,36 +318,90 @@ void NMPCNode::timer_callback()
             state_list_.push_back(state_init_nmpc_vector_);
         }
 
-        auto args_nmpc = nmpc_problem_.generate_state_constraints(
+
+        double linear_v = 0;
+        double angular_v = 0;
+
+
+        if (distance_to_target > 0.5){
+            auto args_nmpc = nmpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
                 map_.y_lower_limit_, map_.y_upper_limit_, 
                 robot_nmpc_.linear_v_max_, robot_nmpc_.angular_v_max_, 
                 max_distance_to_obstacle_, map_.obstacle_list);
 
-        // convert the Eigen::VectorXd to a CasADi DM
-        casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
-        
-        args_nmpc["p"] = noised_state_dm;
-        // target states
-        for (int j = 0; j < N_; ++j)
-        {
-            args_nmpc["p"] = vertcat(casadi::SX(args_nmpc["p"]), casadi::SX(state_target_));
+            // convert the Eigen::VectorXd to a CasADi DM
+            casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
+            
+            args_nmpc["p"] = noised_state_dm;
+            // target states
+            for (int j = 0; j < N_; ++j)
+            {
+                args_nmpc["p"] = vertcat(casadi::SX(args_nmpc["p"]), casadi::SX(state_target_));
+            }
+
+            // initial guess for optimization variables
+            args_nmpc["x0"] = vertcat(reshape(horizon_states_nmpc_, n_states_*(N_+1), 1), reshape(horizon_controls_nmpc_, n_controls_*N_, 1));
+
+            // SOLVE OPTIMIZATION PROBLEM
+            auto result_nmpc = solver_nmpc_(args_nmpc);
+            // STORE HORIZON INFO
+            auto control_results_nmpc = reshape(result_nmpc["x"](casadi::Slice(n_states_*(N_+1), n_states_*(N_+1) + n_controls_*N_)), n_controls_, N_);
+            horizon_states_nmpc_ = reshape(result_nmpc["x"](casadi::Slice(0, n_states_*(N_+1))), n_states_, N_+1);
+
+            linear_v = (double)control_results_nmpc(casadi::Slice(), 0)(0);
+            angular_v = (double)control_results_nmpc(casadi::Slice(), 0)(1);
+
+
+            // USE HORIZON INFO AS INITIAL GUESS FOR NEXT ITERATION
+            horizon_controls_nmpc_ = horzcat(control_results_nmpc(casadi::Slice(), casadi::Slice(1, N_)), reshape(control_results_nmpc(casadi::Slice(), N_-1), -1, 1));
+            horizon_states_nmpc_ = horzcat(horizon_states_nmpc_(casadi::Slice(), casadi::Slice(1, N_+1)), reshape(horizon_states_nmpc_(casadi::Slice(), N_-1), -1, 1));
+
+
+        } else {
+            // edge case
+
+            auto edge_args_nmpc = edge_nmpc_problem_.generate_state_constraints(
+                map_.x_lower_limit_, map_.x_upper_limit_, 
+                map_.y_lower_limit_, map_.y_upper_limit_, 
+                robot_nmpc_.linear_v_max_, robot_nmpc_.angular_v_max_, 
+                max_distance_to_obstacle_, map_.obstacle_list);
+
+
+            // convert the Eigen::VectorXd to a CasADi DM
+            casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
+            
+            edge_args_nmpc["p"] = noised_state_dm;
+            // target states
+            for (int j = 0; j < edge_N_; ++j)
+            {
+                edge_args_nmpc["p"] = vertcat(casadi::SX(edge_args_nmpc["p"]), casadi::SX(state_target_));
+            }
+
+            // initial guess for optimization variables
+            edge_args_nmpc["x0"] = vertcat(reshape(edge_horizon_states_nmpc_, n_states_*(edge_N_+1), 1), reshape(edge_horizon_controls_nmpc_, n_controls_*edge_N_, 1));
+
+            // SOLVE OPTIMIZATION PROBLEM
+            auto edge_result_nmpc = edge_solver_nmpc_(edge_args_nmpc);
+
+
+            // STORE HORIZON INFO
+            auto edge_control_results_nmpc = reshape(edge_result_nmpc["x"](casadi::Slice(n_states_*(edge_N_+1), n_states_*(edge_N_+1) + n_controls_*edge_N_)), n_controls_, edge_N_);
+            edge_horizon_states_nmpc_ = reshape(edge_result_nmpc["x"](casadi::Slice(0, n_states_*(edge_N_+1))), n_states_, edge_N_+1);
+
+            linear_v = (double)edge_control_results_nmpc(casadi::Slice(), 0)(0);
+            angular_v = (double)edge_control_results_nmpc(casadi::Slice(), 0)(1);
+
+            // USE HORIZON INFO AS INITIAL GUESS FOR NEXT ITERATION
+            edge_horizon_controls_nmpc_ = horzcat(edge_control_results_nmpc(casadi::Slice(), casadi::Slice(1, edge_N_)), reshape(edge_control_results_nmpc(casadi::Slice(), edge_N_-1), -1, 1));
+            edge_horizon_states_nmpc_ = horzcat(edge_horizon_states_nmpc_(casadi::Slice(), casadi::Slice(1, edge_N_+1)), reshape(edge_horizon_states_nmpc_(casadi::Slice(), edge_N_-1), -1, 1));
+
+
         }
-
-        // initial guess for optimization variables
-        args_nmpc["x0"] = vertcat(reshape(horizon_states_nmpc_, n_states_*(N_+1), 1), reshape(horizon_controls_nmpc_, n_controls_*N_, 1));
-
-        // SOLVE OPTIMIZATION PROBLEM
-        auto result_nmpc = solver_nmpc_(args_nmpc);
-        // STORE HORIZON INFO
-        auto control_results_nmpc = reshape(result_nmpc["x"](casadi::Slice(n_states_*(N_+1), n_states_*(N_+1) + n_controls_*N_)), n_controls_, N_);
-        horizon_states_nmpc_ = reshape(result_nmpc["x"](casadi::Slice(0, n_states_*(N_+1))), n_states_, N_+1);
-
-
+        
         // PUBLISH VELOCITY TO /husky_velocity_controller/cmd_vel_unstamped
         geometry_msgs::msg::Twist vel_msg;
-        double linear_v = (double)control_results_nmpc(casadi::Slice(), 0)(0);
-        double angular_v = (double)control_results_nmpc(casadi::Slice(), 0)(1);
+        
 
         if (std::abs(linear_v) > robot_nmpc_.linear_v_max_){
             double sign = 1.0;
@@ -337,15 +429,7 @@ void NMPCNode::timer_callback()
         vel_msg.linear.x = linear_v;
         vel_msg.angular.z = angular_v;
         velocity_publisher_->publish(vel_msg);
-
-
-        //
-        // USE HORIZON INFO AS INITIAL GUESS FOR NEXT ITERATION
-        //
-        // auto B_nmpc = update_dynamics(state_init_nmpc_, dynamics_function_);
-        horizon_controls_nmpc_ = horzcat(control_results_nmpc(casadi::Slice(), casadi::Slice(1, N_)), reshape(control_results_nmpc(casadi::Slice(), N_-1), -1, 1));
-        horizon_states_nmpc_ = horzcat(horizon_states_nmpc_(casadi::Slice(), casadi::Slice(1, N_+1)), reshape(horizon_states_nmpc_(casadi::Slice(), N_-1), -1, 1));
-
+        
         ++mpc_iter_;
 
 
@@ -361,6 +445,8 @@ void NMPCNode::timer_callback()
         }
         ave_compute_time_ += duration;
         // std::cout<<"nmpc duration: "<< duration <<"\n-------------\n";
+
+
     } else {
         // PUBLISH VELOCITY TO /husky_velocity_controller/cmd_vel_unstamped
         geometry_msgs::msg::Twist vel_msg;
