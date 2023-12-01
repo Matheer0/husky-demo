@@ -33,7 +33,6 @@ public:
 
     casadi::DM update_dynamics(const casadi::DM& current_state, const casadi::Function& f);
     casadi::DM shift_timestep_ground_truth(const casadi::DM& current_state, const casadi::DM& u, const casadi::Function& f);
-    Eigen::MatrixXd lqr(Eigen::MatrixXd& Q, Eigen::MatrixXd& R, Eigen::MatrixXd& A, Eigen::MatrixXd& B);
     void timer_callback();
     void extract_ground_truth_state(const nav_msgs::msg::Odometry::SharedPtr msg);
 
@@ -50,7 +49,6 @@ public:
     casadi::Function solver_smpc_;
 
     Eigen::MatrixXd A_matrix_ = Eigen::MatrixXd::Zero(3, 3);
-    casadi::DM trajectory_smpc_;
     std::vector<Eigen::VectorXd> state_list_;
 
     Robot robot_smpc_;
@@ -191,7 +189,7 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
 
 
     // Matrix containing all states over all time steps +1 (each column is a state vector)
-    casadi::SX X_smpc = casadi::SX::sym("X", n_states_, N_+1); // nominal mpc
+    casadi::SX X_smpc = casadi::SX::sym("X", n_states_, N_+1); 
 
     // Matrix containing all control actions over all time steps (each column is an action vector)
     casadi::SX U_smpc = casadi::SX::sym("U", n_controls_, N_);
@@ -210,7 +208,6 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
 
     horizon_controls_smpc_ = casadi::DM::zeros(n_controls_, N_); // initial control
     horizon_states_smpc_ = repmat(state_init_smpc_, 1, N_+1); // initial state full
-    trajectory_smpc_ = state_init_smpc_; // stores robot's real states
 
     casadi::Dict opts;
     casadi::Dict ipopt_opts;
@@ -257,11 +254,6 @@ casadi::DM SMPCNode::shift_timestep_ground_truth(const casadi::DM &current_state
 void SMPCNode::timer_callback()
 {   
     //RCLCPP_INFO_STREAM(this->get_logger(), state_init_smpc_ << "\n-------------");
-
-    // record robot position
-    if (mpc_iter_ != 0){
-        trajectory_smpc_ = horzcat(trajectory_smpc_, state_init_smpc_);
-    }
 
     auto mask = casadi::DM({{1, 0, 0}, {0, 1, 0}}); // Mask to extract x and y coordinates from state vector
     if ((double)norm_2(mtimes(mask, state_init_smpc_) - mtimes(mask, state_target_)) > stop_distance_)
@@ -371,7 +363,6 @@ void SMPCNode::timer_callback()
         // USE HORIZON INFO AS INITIAL GUESS FOR NEXT ITERATION
         //
         // auto B_smpc = update_dynamics(state_init_smpc_, dynamics_function_);
-        // TODO: Double check this
         horizon_controls_smpc_ = horzcat(control_results_smpc(casadi::Slice(), casadi::Slice(1, N_)), reshape(control_results_smpc(casadi::Slice(), N_-1), -1, 1));
         horizon_states_smpc_ = horzcat(horizon_states_smpc_(casadi::Slice(), casadi::Slice(1, N_+1)), reshape(horizon_states_smpc_(casadi::Slice(), N_-1), -1, 1));
 
