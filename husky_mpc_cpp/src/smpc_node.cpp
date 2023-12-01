@@ -21,6 +21,11 @@
 #include <random>
 #define M_PI 3.14159265358979323846
 
+
+#include <algorithm>
+#include <iterator>
+#include <vector>
+
 class SMPCNode : public rclcpp::Node
 {
 public:
@@ -46,6 +51,7 @@ public:
 
     Eigen::MatrixXd A_matrix_ = Eigen::MatrixXd::Zero(3, 3);
     casadi::DM trajectory_smpc_;
+    std::vector<Eigen::VectorXd> state_list_;
 
     Robot robot_smpc_;
     Map map_;
@@ -68,6 +74,7 @@ public:
     double ave_compute_time_ = 0;
     double min_compute_time_ = 100;
     double max_compute_time_ = 0;
+    int result_unsaved = 1;
 
     Eigen::MatrixXd dynamics_covariance_ = Eigen::MatrixXd({{ 0.2, 0.1, 0.1},
                                                             {0.1, 0.2, 0.1},
@@ -290,6 +297,11 @@ void SMPCNode::timer_callback()
         }
 
 
+        // store state for plot
+        if (mpc_iter_ > 0){
+            state_list_.push_back(state_init_smpc_vector_);
+        }
+
         // CONSTRUCT SMPC CONSTRAINTS
         std::vector<std::vector<double>> gamma_prediction = smpc_problem_.compute_gamma(A_matrix_, dynamics_covariance_);
         // std::cout << "gamma_prediction:" << std::endl << gamma_prediction << std::endl;
@@ -385,10 +397,41 @@ void SMPCNode::timer_callback()
         vel_msg.angular.z = 0;
         velocity_publisher_->publish(vel_msg);
 
-        std::cout<<"smpc max_compute_time: "<< max_compute_time_ <<'\n';
-        std::cout<<"smpc min_compute_time: "<< min_compute_time_ <<'\n';
-        std::cout<<"violations: "<< timing_violation_ <<'\n';
-        std::cout<<"smpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
+        if (result_unsaved){
+            std::cout<<"smpc max_compute_time: "<< max_compute_time_ <<'\n';
+            std::cout<<"smpc min_compute_time: "<< min_compute_time_ <<'\n';
+            std::cout<<"violations: "<< timing_violation_ <<'\n';
+            std::cout<<"smpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
+            std::cout<<"iterations: "<< mpc_iter_ <<'\n';
+
+
+            // Specify the file path
+            std::string filePath = "/home/alex/a_thesis/smpc_cpp.csv";
+
+            // Open the CSV file for writing
+            std::ofstream outputFile(filePath);
+            if (!outputFile.is_open()) {
+                std::cerr << "Unable to open the output file." << std::endl;
+            }
+
+            // Iterate through each Eigen::VectorXd and write to the CSV file
+            for (const auto& vector : state_list_) {
+                for (int i = 0; i < vector.size(); ++i) {
+                    outputFile << vector(i);
+                    // Add a comma if it's not the last element in the row
+                    if (i < vector.size() - 1) {
+                        outputFile << ",";
+                    }
+                }
+                outputFile << "\n";  // New line for the next row
+            }
+
+            outputFile.close();
+            std::cout << "CSV file written successfully." << std::endl;
+
+            result_unsaved = 0;
+        }
+        
     }
 }
 
