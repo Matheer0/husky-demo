@@ -242,7 +242,7 @@ NMPCNode::NMPCNode() : rclcpp::Node("nmpc_node")
 
 
     mpc_iter_ = 0;
-    stop_distance_ = 0.3;
+    stop_distance_ = 0.5;
     RCLCPP_INFO(this->get_logger(), "Finishing initialization");
 
     velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 1);
@@ -279,9 +279,13 @@ void NMPCNode::timer_callback()
 
     auto mask = casadi::DM({{1, 0, 0}, {0, 1, 0}}); // Mask to extract x and y coordinates from state vector
     double distance_to_target = (double)norm_2(mtimes(mask, state_init_nmpc_) - mtimes(mask, state_target_));
-    if (distance_to_target > stop_distance_)
+    // PUBLISH VELOCITY TO /husky_velocity_controller/cmd_vel_unstamped
+    geometry_msgs::msg::Twist vel_msg;
+    double linear_v = 0;
+    double angular_v = 0;
+
+    if (distance_to_target > 0.2)
     {   
-        std::cout << distance_to_target << std::endl;
         // timing computation time
         std::clock_t start = std::clock();
 
@@ -318,12 +322,13 @@ void NMPCNode::timer_callback()
             state_list_.push_back(state_init_nmpc_vector_);
         }
 
+        double rounded = round(distance_to_target*10)/10;
 
-        double linear_v = 0;
-        double angular_v = 0;
+        if (rounded > stop_distance_-0.1){
+            std::cout << rounded << std::endl;
+            std::cout << distance_to_target << std::endl;
+            std::cout << "======" << std::endl;
 
-
-        if (distance_to_target > 0.5){
             auto args_nmpc = nmpc_problem_.generate_state_constraints(
                 map_.x_lower_limit_, map_.x_upper_limit_, 
                 map_.y_lower_limit_, map_.y_upper_limit_, 
@@ -357,50 +362,73 @@ void NMPCNode::timer_callback()
             horizon_controls_nmpc_ = horzcat(control_results_nmpc(casadi::Slice(), casadi::Slice(1, N_)), reshape(control_results_nmpc(casadi::Slice(), N_-1), -1, 1));
             horizon_states_nmpc_ = horzcat(horizon_states_nmpc_(casadi::Slice(), casadi::Slice(1, N_+1)), reshape(horizon_states_nmpc_(casadi::Slice(), N_-1), -1, 1));
 
+            ++mpc_iter_;
+
+
+            double duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
+            if (duration > max_compute_time_){
+                max_compute_time_ = duration;
+            }
+            if (duration < min_compute_time_){
+                min_compute_time_ = duration;
+            }
+            if (duration > dt_){
+                timing_violation_ += 1;
+            }
+            ave_compute_time_ += duration;
+            // std::cout<<"nmpc duration: "<< duration <<"\n-------------\n";
+
+
 
         } else {
             // edge case
 
-            auto edge_args_nmpc = edge_nmpc_problem_.generate_state_constraints(
-                map_.x_lower_limit_, map_.x_upper_limit_, 
-                map_.y_lower_limit_, map_.y_upper_limit_, 
-                robot_nmpc_.linear_v_max_, robot_nmpc_.angular_v_max_, 
-                max_distance_to_obstacle_, map_.obstacle_list);
+
+            if (result_unsaved){
+                std::cout<<"nmpc max_compute_time: "<< max_compute_time_ <<'\n';
+                std::cout<<"nmpc min_compute_time: "<< min_compute_time_ <<'\n';
+                std::cout<<"violations: "<< timing_violation_ <<'\n';
+                std::cout<<"nmpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
+                std::cout<<"iterations: "<< mpc_iter_ <<'\n';
 
 
-            // convert the Eigen::VectorXd to a CasADi DM
-            casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
-            
-            edge_args_nmpc["p"] = noised_state_dm;
-            // target states
-            for (int j = 0; j < edge_N_; ++j)
-            {
-                edge_args_nmpc["p"] = vertcat(casadi::SX(edge_args_nmpc["p"]), casadi::SX(state_target_));
+                // Specify the file path
+                std::string filePath = "/home/alex/a_thesis/nmpc_cpp.csv";
+
+                // Open the CSV file for writing
+                std::ofstream outputFile(filePath);
+                if (!outputFile.is_open()) {
+                    std::cerr << "Unable to open the output file." << std::endl;
+                }
+
+                // Iterate through each Eigen::VectorXd and write to the CSV file
+                for (const auto& vector : state_list_) {
+                    for (int i = 0; i < vector.size(); ++i) {
+                        outputFile << vector(i);
+                        // Add a comma if it's not the last element in the row
+                        if (i < vector.size() - 1) {
+                            outputFile << ",";
+                        }
+                    }
+                    outputFile << "\n";  // New line for the next row
+                }
+
+                outputFile.close();
+                std::cout << "CSV file written successfully." << std::endl;
+
+                result_unsaved = 0;
             }
 
-            // initial guess for optimization variables
-            edge_args_nmpc["x0"] = vertcat(reshape(edge_horizon_states_nmpc_, n_states_*(edge_N_+1), 1), reshape(edge_horizon_controls_nmpc_, n_controls_*edge_N_, 1));
+            std::cout << "------" << std::endl;
+            std::cout << rounded << std::endl;
+            std::cout << distance_to_target << std::endl;
+            std::cout << "======" << std::endl;
 
-            // SOLVE OPTIMIZATION PROBLEM
-            auto edge_result_nmpc = edge_solver_nmpc_(edge_args_nmpc);
-
-
-            // STORE HORIZON INFO
-            auto edge_control_results_nmpc = reshape(edge_result_nmpc["x"](casadi::Slice(n_states_*(edge_N_+1), n_states_*(edge_N_+1) + n_controls_*edge_N_)), n_controls_, edge_N_);
-            edge_horizon_states_nmpc_ = reshape(edge_result_nmpc["x"](casadi::Slice(0, n_states_*(edge_N_+1))), n_states_, edge_N_+1);
-
-            linear_v = (double)edge_control_results_nmpc(casadi::Slice(), 0)(0);
-            angular_v = (double)edge_control_results_nmpc(casadi::Slice(), 0)(1);
-
-            // USE HORIZON INFO AS INITIAL GUESS FOR NEXT ITERATION
-            edge_horizon_controls_nmpc_ = horzcat(edge_control_results_nmpc(casadi::Slice(), casadi::Slice(1, edge_N_)), reshape(edge_control_results_nmpc(casadi::Slice(), edge_N_-1), -1, 1));
-            edge_horizon_states_nmpc_ = horzcat(edge_horizon_states_nmpc_(casadi::Slice(), casadi::Slice(1, edge_N_+1)), reshape(edge_horizon_states_nmpc_(casadi::Slice(), edge_N_-1), -1, 1));
-
+            std::cout << linear_v << std::endl;
+            std::cout << linear_v << std::endl;
+            std::cout << "------" << std::endl;
 
         }
-        
-        // PUBLISH VELOCITY TO /husky_velocity_controller/cmd_vel_unstamped
-        geometry_msgs::msg::Twist vel_msg;
         
 
         if (std::abs(linear_v) > robot_nmpc_.linear_v_max_){
@@ -430,26 +458,9 @@ void NMPCNode::timer_callback()
         vel_msg.angular.z = angular_v;
         velocity_publisher_->publish(vel_msg);
         
-        ++mpc_iter_;
-
-
-        double duration = ( std::clock() - start ) / (double) CLOCKS_PER_SEC;
-        if (duration > max_compute_time_){
-            max_compute_time_ = duration;
-        }
-        if (duration < min_compute_time_){
-            min_compute_time_ = duration;
-        }
-        if (duration > dt_){
-            timing_violation_ += 1;
-        }
-        ave_compute_time_ += duration;
-        // std::cout<<"nmpc duration: "<< duration <<"\n-------------\n";
-
 
     } else {
-        // PUBLISH VELOCITY TO /husky_velocity_controller/cmd_vel_unstamped
-        geometry_msgs::msg::Twist vel_msg;
+        
         vel_msg.linear.x = 0;
         vel_msg.angular.z = 0;
         velocity_publisher_->publish(vel_msg);
