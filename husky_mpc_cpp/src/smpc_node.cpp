@@ -105,6 +105,7 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
 
     obstacle_extra_distance_ = 2;
     max_distance_to_obstacle_ = 1000.0; 
+    stop_distance_ = 1;
 
     dt_ = 0.1;  // time between steps in seconds
     N_ = 100; // number of look ahead steps
@@ -164,9 +165,9 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     double y_center = 0;
     off_set_ = 10;
 
-    //x_target_ = 19;
-    x_target_ = 8;
-    double y_target = -2;
+    x_target_ = 19;
+    x_target_ = 9;
+    double y_target = -9;
     double theta_target = 0;
     
     // Construct reference trajectory
@@ -221,10 +222,9 @@ SMPCNode::SMPCNode() : rclcpp::Node("smpc_node")
     solver_smpc_ = casadi::nlpsol("solver", "ipopt", nlp_prob_smpc, opts);
 
     mpc_iter_ = 0;
-    stop_distance_ = 0.5;
     RCLCPP_INFO(this->get_logger(), "Finishing initialization");
 
-    velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 1);
+    velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/husky_velocity_controller/cmd_vel_unstamped", 10);
     ground_truth_subscriber_ = this->create_subscription<nav_msgs::msg::Odometry>("/ground_truth", 1, std::bind(&SMPCNode::extract_ground_truth_state, this, std::placeholders::_1));
     auto duration = std::chrono::milliseconds((int)(dt_*1000));
     control_timer_ = this->create_wall_timer(duration, std::bind(&SMPCNode::timer_callback, this));
@@ -264,9 +264,24 @@ void SMPCNode::timer_callback()
     double angular_v = 0;
 
     // Truncate after the first decimal place
-    double truncated_distance = floor(distance_to_target * 10) / 10;
+    double truncated_distance = floor(distance_to_target+0.5);
 
-    if (distance_to_target > 0.2)
+    if (result_unsaved){
+        ///*
+        std::cout << distance_to_target << std::endl;
+        std::cout << distance_to_target+0.5 << std::endl;
+        std::cout << truncated_distance << std::endl;
+        std::cout << "======" << std::endl;
+        //*/
+
+        // store state for plot
+        if (mpc_iter_ > 0){
+            state_list_.push_back(state_init_smpc_vector_);
+        }
+        ++mpc_iter_;
+    }
+
+    if (truncated_distance > stop_distance_)
     {   
         // timing computation time
         std::clock_t start = std::clock();
@@ -286,8 +301,8 @@ void SMPCNode::timer_callback()
         }
         // transform using the Cholesky decomposition of the covariance matrix
         noised_state = dynamics_covariance_.llt().matrixL() * noised_state + state_init_smpc_vector_;
+
         // make noised oirentation into proper state space: [-pi, pi]
-        
         if (noised_state(2) < -M_PI)
         {   
             std::cout << "=========" << std::endl;
@@ -300,99 +315,46 @@ void SMPCNode::timer_callback()
         }
 
 
-        // store state for plot
-        if (mpc_iter_ > 0){
-            state_list_.push_back(state_init_smpc_vector_);
-        }
-
-        //double rounded = floor(distance_to_target*10)/10;
-
-        if (distance_to_target > stop_distance_+0.2){
-            /*
-            std::cout << rounded << std::endl;
-            std::cout << distance_to_target << std::endl;
-            std::cout << "======" << std::endl;
-            */
-
-            // CONSTRUCT SMPC CONSTRAINTS
-            std::vector<std::vector<double>> gamma_prediction = smpc_problem_.compute_gamma(A_matrix_, dynamics_covariance_);
-            // std::cout << "gamma_prediction:" << std::endl << gamma_prediction << std::endl;
-            // std::cout << "============================" << std::endl;
-
-            auto args_smpc = smpc_problem_.generate_state_constraints(
-                    map_.x_lower_limit_, map_.x_upper_limit_, 
-                    map_.y_lower_limit_, map_.y_upper_limit_,
-                    robot_smpc_.linear_v_max_, robot_smpc_.angular_v_max_, 
-                    obstacle_extra_distance_, max_distance_to_obstacle_, 
-                    gamma_prediction, map_.obstacle_list);
-
-            // convert the Eigen::VectorXd to a CasADi DM
-            casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
         
-            args_smpc["p"] = noised_state_dm;
-            // target states
-            for (int j = 0; j < N_; ++j)
-            {
-                args_smpc["p"] = vertcat(casadi::SX(args_smpc["p"]), casadi::SX(state_target_));
-            }
 
-            // initial guess for optimization variables
-            args_smpc["x0"] = vertcat(reshape(horizon_states_smpc_, n_states_*(N_+1), 1), reshape(horizon_controls_smpc_, n_controls_*N_, 1));
+        // CONSTRUCT SMPC CONSTRAINTS
+        std::vector<std::vector<double>> gamma_prediction = smpc_problem_.compute_gamma(A_matrix_, dynamics_covariance_);
+        // std::cout << "gamma_prediction:" << std::endl << gamma_prediction << std::endl;
+        // std::cout << "============================" << std::endl;
 
-            // SOLVE OPTIMIZATION PROBLEM
-            auto result_smpc = solver_smpc_(args_smpc);
-            // STORE HORIZON INFO
-            auto control_results_smpc = reshape(result_smpc["x"](casadi::Slice(n_states_*(N_+1), n_states_*(N_+1) + n_controls_*N_)), n_controls_, N_);
-            horizon_states_smpc_ = reshape(result_smpc["x"](casadi::Slice(0, n_states_*(N_+1))), n_states_, N_+1);
+        auto args_smpc = smpc_problem_.generate_state_constraints(
+                map_.x_lower_limit_, map_.x_upper_limit_, 
+                map_.y_lower_limit_, map_.y_upper_limit_,
+                robot_smpc_.linear_v_max_, robot_smpc_.angular_v_max_, 
+                obstacle_extra_distance_, max_distance_to_obstacle_, 
+                gamma_prediction, map_.obstacle_list);
 
-            linear_v = (double)control_results_smpc(casadi::Slice(), 0)(0);
-            angular_v = (double)control_results_smpc(casadi::Slice(), 0)(1);
-
-
-            // USE HORIZON INFO AS INITIAL GUESS FOR NEXT ITERATION
-            horizon_controls_smpc_ = horzcat(control_results_smpc(casadi::Slice(), casadi::Slice(1, N_)), reshape(control_results_smpc(casadi::Slice(), N_-1), -1, 1));
-            horizon_states_smpc_ = horzcat(horizon_states_smpc_(casadi::Slice(), casadi::Slice(1, N_+1)), reshape(horizon_states_smpc_(casadi::Slice(), N_-1), -1, 1));
-
-            ++mpc_iter_;
-
-        } else {
-
-            if (result_unsaved){
-                std::cout<<"smpc max_compute_time: "<< max_compute_time_ <<'\n';
-                std::cout<<"smpc min_compute_time: "<< min_compute_time_ <<'\n';
-                std::cout<<"violations: "<< timing_violation_ <<'\n';
-                std::cout<<"smpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
-                std::cout<<"iterations: "<< mpc_iter_ <<'\n';
-
-
-                // Specify the file path
-                std::string filePath = "/home/alex/a_thesis/smpc_cpp.csv";
-
-                // Open the CSV file for writing
-                std::ofstream outputFile(filePath);
-                if (!outputFile.is_open()) {
-                    std::cerr << "Unable to open the output file." << std::endl;
-                }
-
-                // Iterate through each Eigen::VectorXd and write to the CSV file
-                for (const auto& vector : state_list_) {
-                    for (int i = 0; i < vector.size(); ++i) {
-                        outputFile << vector(i);
-                        // Add a comma if it's not the last element in the row
-                        if (i < vector.size() - 1) {
-                            outputFile << ",";
-                        }
-                    }
-                    outputFile << "\n";  // New line for the next row
-                }
-
-                outputFile.close();
-                std::cout << "CSV file written successfully." << std::endl;
-
-                result_unsaved = 0;
-            }
+        // convert the Eigen::VectorXd to a CasADi DM
+        casadi::DM noised_state_dm{std::vector<double>(noised_state.data(), noised_state.size() + noised_state.data())};
+    
+        args_smpc["p"] = noised_state_dm;
+        // target states
+        for (int j = 0; j < N_; ++j)
+        {
+            args_smpc["p"] = vertcat(casadi::SX(args_smpc["p"]), casadi::SX(state_target_));
         }
 
+        // initial guess for optimization variables
+        args_smpc["x0"] = vertcat(reshape(horizon_states_smpc_, n_states_*(N_+1), 1), reshape(horizon_controls_smpc_, n_controls_*N_, 1));
+
+        // SOLVE OPTIMIZATION PROBLEM
+        auto result_smpc = solver_smpc_(args_smpc);
+        // STORE HORIZON INFO
+        auto control_results_smpc = reshape(result_smpc["x"](casadi::Slice(n_states_*(N_+1), n_states_*(N_+1) + n_controls_*N_)), n_controls_, N_);
+        horizon_states_smpc_ = reshape(result_smpc["x"](casadi::Slice(0, n_states_*(N_+1))), n_states_, N_+1);
+
+        linear_v = (double)control_results_smpc(casadi::Slice(), 0)(0);
+        angular_v = (double)control_results_smpc(casadi::Slice(), 0)(1);
+
+
+        // USE HORIZON INFO AS INITIAL GUESS FOR NEXT ITERATION
+        horizon_controls_smpc_ = horzcat(control_results_smpc(casadi::Slice(), casadi::Slice(1, N_)), reshape(control_results_smpc(casadi::Slice(), N_-1), -1, 1));
+        horizon_states_smpc_ = horzcat(horizon_states_smpc_(casadi::Slice(), casadi::Slice(1, N_+1)), reshape(horizon_states_smpc_(casadi::Slice(), N_-1), -1, 1));
 
         if (std::abs(linear_v) > robot_smpc_.linear_v_max_){
             double sign = 1.0;
@@ -435,6 +397,40 @@ void SMPCNode::timer_callback()
         // std::cout<<"smpc duration: "<< duration <<"\n-------------\n";
 
     } else {
+
+        // robot has reached target
+        if (result_unsaved){
+            std::cout<<"iterations: "<< mpc_iter_ <<'\n';
+            std::cout<<"smpc max_compute_time: "<< max_compute_time_ <<'\n';
+            std::cout<<"smpc min_compute_time: "<< min_compute_time_ <<'\n';
+            std::cout<<"violations: "<< timing_violation_ <<'\n';
+            std::cout<<"smpc ave_compute_time: "<< ave_compute_time_/mpc_iter_ <<'\n';
+
+            // Specify the file path
+            std::string filePath = "/home/alex/a_thesis/smpc_cpp.csv";
+
+            // Open the CSV file for writing
+            std::ofstream outputFile(filePath);
+            if (!outputFile.is_open()) {
+                std::cerr << "Unable to open the output file." << std::endl;
+            }
+
+            // Iterate through each Eigen::VectorXd and write to the CSV file
+            for (const auto& vector : state_list_) {
+                for (int i = 0; i < vector.size(); ++i) {
+                    outputFile << vector(i);
+                    // Add a comma if it's not the last element in the row
+                    if (i < vector.size() - 1) {
+                        outputFile << ",";
+                    }
+                }
+                outputFile << "\n";  // New line for the next row
+            }
+
+            outputFile.close();
+            std::cout << "CSV file written successfully." << std::endl;
+            result_unsaved = 0;
+        }
         
         vel_msg.linear.x = 0;
         vel_msg.angular.z = 0;
